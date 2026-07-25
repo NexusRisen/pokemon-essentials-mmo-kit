@@ -32,37 +32,60 @@ dry = ENV["REPLAY_DRY"].to_s.downcase == "on"
 
 # Replayable statuses only. walk_mismatch / no_log / mode_mismatch are TRIAGE
 # evidence — never silently overwritten; REPLAY_ID alone still respects that
-# (REPLAY_FORCE=on to override, e.g. after a triage decision).
+# (REPLAY_FORCE=on to override, e.g. after a triage decision). The harness may
+# only transition pending|walk_ok|walk_skipped -> match|mismatch|error|
+# not_replayable (the replay_status state machine documented in migration 013).
 REPLAYABLE = %w[pending walk_ok walk_skipped].freeze
-ds = db[:battle_records].where(replay_status: REPLAYABLE)
-if ENV["REPLAY_ID"]
-  ds = db[:battle_records].where(id: ENV["REPLAY_ID"].to_i)
-  ds = ds.where(replay_status: REPLAYABLE) unless ENV["REPLAY_FORCE"].to_s.downcase == "on"
-end
-rows = ds.order(:id).limit((ENV["REPLAY_LIMIT"] || 100).to_i).all
-puts "replay: #{rows.length} record(s) queued#{dry ? ' (DRY RUN)' : ''}"
+STATUS = { match: "match", mismatch: "mismatch", error: "error", skipped: "not_replayable" }.freeze
 
-tally = Hash.new(0)
-rows.each do |row|
-  rec = PEMK::Wire.decode_primitive(row[:record].to_s)
-  result =
-    if rec.is_a?(Hash)
-      PEMK::Harness.replay(rec)
+# One pass over the queue. -> tally hash (also the loop's liveness signal).
+def replay_pass(db, dry:, limit:)
+  ds =
+    if ENV["REPLAY_ID"]
+      one = db[:battle_records].where(id: ENV["REPLAY_ID"].to_i)
+      ENV["REPLAY_FORCE"].to_s.downcase == "on" ? one : one.where(replay_status: REPLAYABLE)
     else
-      { verdict: :error, detail: "record body undecodable" }
+      db[:battle_records].where(replay_status: REPLAYABLE)
     end
-  status = { match: "match", mismatch: "mismatch", error: "error",
-             skipped: "not_replayable" }.fetch(result[:verdict])
-  db[:battle_records].where(id: row[:id]).update(replay_status: status) unless dry
-  tally[result[:verdict]] += 1
-  line = "  ##{row[:id]} #{row[:mode]} outcome=#{row[:outcome]} rounds=#{row[:rounds]}: #{result[:verdict].to_s.upcase}"
-  line += " — #{result[:detail]}" if result[:detail]
-  puts line
+  rows = ds.order(:id).limit(limit).all
+  tally = Hash.new(0)
+  rows.each do |row|
+    rec = PEMK::Wire.decode_primitive(row[:record].to_s)
+    result = rec.is_a?(Hash) ? PEMK::Harness.replay(rec) : { verdict: :error, detail: "record body undecodable" }
+    # verdict_at stamps EVERY pass (the live server's harness-liveness detector
+    # reads it); the state machine only lets us land the four terminal statuses.
+    db[:battle_records].where(id: row[:id])
+       .update(replay_status: STATUS.fetch(result[:verdict]), verdict_at: Time.now) unless dry
+    tally[result[:verdict]] += 1
+    line = "  ##{row[:id]} #{row[:mode]} outcome=#{row[:outcome]} rounds=#{row[:rounds]}: #{result[:verdict].to_s.upcase}"
+    line += " — #{result[:detail]}" if result[:detail]
+    puts line
+  end
+  tally
 end
 
-total = rows.length
-puts format("replay: done — %d match / %d mismatch / %d error of %d (parity %.1f%%)",
-            tally[:match], tally[:mismatch], tally[:error], total,
+# PEMK_REPLAY_LOOP=<seconds>: the DAEMON form — boot the engine ONCE (the 1.7s
+# amortizes), then poll the queue on the interval. This is what a real operator
+# runs (a compose service / systemd unit); cron re-boots every run instead.
+loop_secs = ENV["PEMK_REPLAY_LOOP"].to_s.strip
+if loop_secs.match?(/\A[1-9]\d*\z/)
+  interval = loop_secs.to_i
+  puts "replay: LOOP mode — polling every #{interval}s (Ctrl-C to stop)"
+  trap("INT")  { puts "\nreplay: stopping"; exit 0 }
+  trap("TERM") { exit 0 }
+  loop do
+    t = replay_pass(db, dry: dry, limit: (ENV["REPLAY_LIMIT"] || 500).to_i)
+    puts format("replay: pass — %d match / %d mismatch / %d error / %d skipped",
+                t[:match], t[:mismatch], t[:error], t[:skipped]) if t.values.sum.positive?
+    sleep interval
+  end
+end
+
+# One-shot mode (cron / manual).
+tally = replay_pass(db, dry: dry, limit: (ENV["REPLAY_LIMIT"] || 100).to_i)
+total = tally.values.sum
+puts format("replay: done — %d match / %d mismatch / %d error / %d skipped of %d (parity %.1f%%)",
+            tally[:match], tally[:mismatch], tally[:error], tally[:skipped], total,
             total.zero? ? 0.0 : (100.0 * tally[:match] / total))
 
 # --- D7 part 3: whole-corpus parity report -----------------------------------

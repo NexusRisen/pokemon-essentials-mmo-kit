@@ -37,6 +37,7 @@ class ServerEncounterTest < Minitest::Test
     @db[:pickups].delete rescue nil
     @db[:monster_transfers].delete rescue nil
     @db[:monsters].delete rescue nil
+    @db[:enforcement_events].delete rescue nil
     @db[:accounts].delete
     @logs = []
   end

@@ -122,6 +122,58 @@ PEMK plugin file, not a core-script edit.
 
 ---
 
+## (Advanced) Running the battle anti-cheat at scale
+
+Everything ships **off by default** — you never need any of this to run a server.
+The anti-cheat is opt-in per feature via `PEMK_*` env flags, each ramping
+`off → shadow → on` so you watch telemetry before anything acts. The battle-engine
+tier (D7/D8) adds one moving part beyond the server: a **replay worker** that
+re-simulates recorded battles on the real engine, in a **separate process** (it
+loads the whole game engine — never the live server).
+
+**The recommended ramp (weeks, not minutes):**
+
+1. `PEMK_BATTLE_ENFORCE_ENCOUNTERS=on` — the server mints wild encounters (needed
+   for seeds). Then `PEMK_BATTLE_ENFORCE_RNG=shadow` for ~2 weeks: clients record
+   battles, the server verifies the RNG seed. Watch the corpus parity:
+
+   ```bash
+   # in server/, one-shot — replays pending records and prints per-cohort parity
+   bundle exec ruby bin/pemk_replay.rb
+   ```
+
+2. When parity is ~100% for your engine build(s), flip `PEMK_BATTLE_ENFORCE_RNG=on`
+   and run the replay worker as a **daemon** (a compose service / systemd unit):
+
+   ```bash
+   PEMK_REPLAY_LOOP=300 bundle exec ruby bin/pemk_replay.rb   # boot once, poll every 5 min
+   ```
+
+3. Only then consider D8 enforcement — its **own** flag, so `rng=on` never silently
+   becomes rejection. Start in shadow: `PEMK_BATTLE_ENFORCE_RESIM=shadow` audits
+   what it *would* quarantine (`enforcement_events` rows, `would_quarantine`) without
+   touching anything. When the audit is clean, `=on`: a seed-refuted catch is
+   quarantined after `PEMK_RESIM_MIN_STRIKES` (default 2) distinct refuted battles —
+   the mon stays fully playable, only **un-tradeable** (and later ranked-ineligible).
+   Nothing is ever destroyed; EXP/money are untouched.
+
+**Operator console** (reversal is the whole point — undo a false positive in one command):
+
+```bash
+bundle exec ruby bin/pemk_quarantine.rb list            # quarantined mons
+bundle exec ruby bin/pemk_quarantine.rb show <uid>      # full evidence + audit trail
+bundle exec ruby bin/pemk_quarantine.rb pardon <uid>    # un-quarantine (one UPDATE)
+bundle exec ruby bin/pemk_quarantine.rb reports         # open review queue
+```
+
+**No replay worker?** Then keep `PEMK_BATTLE_ENFORCE_RESIM=off` (or `shadow`): the
+seed walk still refutes forged rolls at ingest, and everything else stays
+detection-only. If you turn `resim=on` but never run the worker, honest catches
+just wait out a 60-minute trade hold — never a permanent block. The server logs a
+loud warning if replayable records pile up with no verdict.
+
+Full design + honest limits: [`docs/LAYER-D-BATTLE-DESIGN.md`](LAYER-D-BATTLE-DESIGN.md).
+
 ## Understand what you're running (deeper docs)
 
 - **Project overview & what works today:** [`README.md`](../README.md)

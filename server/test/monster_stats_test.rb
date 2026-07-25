@@ -16,6 +16,7 @@ class MonsterStatsTest < Minitest::Test
     @db[:encounter_rolls].delete rescue nil
     @db[:monster_transfers].delete rescue nil
     @db[:monsters].delete rescue nil
+    @db[:enforcement_events].delete rescue nil
     @db[:accounts].delete
     @a = @db[:accounts].insert(email: "ms-a@x.co", password_hash: "x", status: "active", created_at: Time.now)
     @b = @db[:accounts].insert(email: "ms-b@x.co", password_hash: "x", status: "active", created_at: Time.now)

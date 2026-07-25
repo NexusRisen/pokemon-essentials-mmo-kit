@@ -22,6 +22,7 @@ class ServerTradeTest < Minitest::Test
     @db = Sequel.connect(ENV.fetch("DATABASE_URL"))
     @db[:monster_transfers].delete
     @db[:monsters].delete
+    @db[:enforcement_events].delete rescue nil
     @db[:accounts].delete
     @server = PEMK::Server.new(logger: ->(_m) {})
     @server.start

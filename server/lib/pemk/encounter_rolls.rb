@@ -82,13 +82,26 @@ module PEMK
     # retry would otherwise mislabel "client" AND strand a claimable wild_caught roll.
     # species+pid is already 2^-32-selective per account.
     def claim(account_id, species, pid, now: Time.now)
+      # FOR UPDATE: serialize against a concurrent D8 condemn on the SAME roll (both
+      # lock the row) so a catch can never claim-then-birth-active in the gap where a
+      # sweep is poisoning its roll. Runs inside mint_batch's transaction.
       row = @db[:encounter_rolls]
             .where(account_id: account_id, species: species.to_s, pid: pid, claimed_at: nil)
-            .order(Sequel.lit("caught_at IS NULL"), :id).limit(1).first
+            .order(Sequel.lit("caught_at IS NULL"), :id).limit(1).for_update.first
       return nil unless row
 
       @db[:encounter_rolls].where(id: row[:id]).update(claimed_at: now)
-      row[:caught_at] ? :wild_caught : :wild
+      # D8 needs the roll's enforcement context at birth: the seed (a record is
+      # owed -> provisional) and a possible walk-refutation (condemned -> the mon
+      # is born quarantined). The uid is stamped right after the mint inserts
+      # (stamp_claim) — same mint_batch transaction, so the link is crash-atomic.
+      { label: row[:caught_at] ? :wild_caught : :wild,
+        id: row[:id], battle_seed: row[:battle_seed], condemned_at: row[:condemned_at] }
+    end
+
+    # The roll->mon link (the ONLY direction stored; mon->roll derives by join).
+    def stamp_claim(roll_id, uid)
+      @db[:encounter_rolls].where(id: roll_id).update(claimed_monster_uid: uid)
     end
   end
 end

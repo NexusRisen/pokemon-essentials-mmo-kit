@@ -45,8 +45,9 @@ module PEMK
       # off/shadow would label every honest catch "client" (and invert the signal). With
       # rolls disabled, origin stays NULL = its documented "unknown" meaning.
       @monsters   = Monsters.new(@db, @config.monster_caps, logger: @log,
-                                 rolls: (@config.battle_enforce_encounters == :on ? @encounter_rolls : nil))
-      @trades     = Trades.new(@db)
+                                 rolls: (@config.battle_enforce_encounters == :on ? @encounter_rolls : nil),
+                                 resim: @config.battle_enforce_resim)   # D8: birth states
+      @trades     = Trades.new(@db, resim: @config.battle_enforce_resim)   # D8: provisional trade hold
       # M4 Layer A: read-only world model + detection-only interaction audit. Both are
       # in-memory and DB-free; a missing export just makes the audit a no-op.
       @world      = WorldData.new(@config.world_path, logger: @log)
@@ -67,6 +68,11 @@ module PEMK
       # M4 Layer D D6: per-mon EXP high-water + rollback detection (part 1) + the :on
       # up-only restore (part 2). battle_data supplies per-species EXP sanity caps.
       @monster_stats = MonsterStats.new(@db, battle: @battle) if @config.battle_enforce_exp != :off
+      # M4 Layer D D8: the re-sim verdict sweep (live-server writer of monster state).
+      @resim = ResimVerdicts.new(@db, mode: @config.battle_enforce_resim,
+                                 min_strikes: @config.resim_min_strikes, logger: @log) if @config.battle_enforce_resim != :off
+      @last_resim_sweep = nil
+      @resim_sweeping   = false
       # M4 Layer D D7 part 1: the battle-record corpus ingest (shadow + on).
       if @config.battle_enforce_rng != :off
         @battle_records = BattleRecords.new(@db, mode: @config.battle_enforce_rng, logger: @log)
@@ -106,6 +112,10 @@ module PEMK
       @log.call("server: anomaly detection = #{@config.anomaly_detection ? 'on' : 'off'} (M4 Layer D D5, review-queue only)")
       @log.call("server: exp authority = #{@config.battle_enforce_exp} (M4 Layer D D6; on = up-only restore to high-water)")
       @log.call("server: battle rng = #{@config.battle_enforce_rng} (M4 Layer D D7 part 1 — instrumentation, never rejects)")
+      @log.call("server: resim enforcement = #{@config.battle_enforce_resim} (M4 Layer D D8 — walk-tier quarantine, strikes=#{@config.resim_min_strikes})")
+      if @config.battle_enforce_resim != :off && @config.battle_enforce_rng != :on
+        @log.call("server: WARNING resim enforcement is #{@config.battle_enforce_resim} but battle rng is #{@config.battle_enforce_rng} — no seeds/records means nothing can ever be verified or condemned")
+      end
       if @config.battle_enforce_rewards != :off && @config.battle_enforce_encounters != :on
         @log.call("server: WARNING reward detection is on but encounter enforcement is #{@config.battle_enforce_encounters} — no foe context, so battle windows can't open")
       end
@@ -856,10 +866,42 @@ module PEMK
     # in-memory; the anomaly sweep is DB-heavy so it's dispatched to a worker, gated to run
     # at most every ANOMALY_SWEEP_SEC and never overlapping itself.
     ANOMALY_SWEEP_SEC = 60
+    RESIM_SWEEP_SEC   = 60
 
     def on_tick
       sweep_trades
       maybe_anomaly_sweep
+      maybe_resim_sweep
+    end
+
+    # D8: same non-overlapping worker-dispatch shape as the anomaly sweep. Consumes
+    # harness-stamped verdicts into monster state. Logs a loud WARNING if replayable
+    # records pile up while verdict_at never advances (the harness isn't running).
+    def maybe_resim_sweep
+      return unless @resim
+
+      now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      return if @resim_sweeping
+      return if @last_resim_sweep && (now - @last_resim_sweep) < RESIM_SWEEP_SEC
+
+      @last_resim_sweep = now
+      @resim_sweeping   = true
+      @pool.submit do
+        begin
+          @resim.sweep
+          warn_if_harness_stalled
+        ensure
+          @reactor.post { @resim_sweeping = false }
+        end
+      end
+    end
+
+    def warn_if_harness_stalled
+      stale = @db[:battle_records].where(replay_status: %w[pending walk_ok walk_skipped])
+                                  .where { created_at < Time.now - 86_400 }.count
+      @log.call("resim: WARNING #{stale} replayable record(s) >24h old with no verdict — is bin/pemk_replay.rb running?") if stale.positive?
+    rescue StandardError => e
+      @log.call("resim: harness-liveness check failed #{e.class}: #{e.message}")
     end
 
     def maybe_anomaly_sweep
@@ -918,7 +960,8 @@ module PEMK
         battle_enforce_catches: @config.battle_enforce_catches.to_s,         # M4 Layer D D3 catch mode
         battle_enforce_rewards: @config.battle_enforce_rewards.to_s,         # M4 Layer D D4 reward mode
         battle_enforce_exp: @config.battle_enforce_exp.to_s,                 # M4 Layer D D6 EXP mode
-        battle_enforce_rng: @config.battle_enforce_rng.to_s }                # M4 Layer D D7 rng/capture mode
+        battle_enforce_rng: @config.battle_enforce_rng.to_s,                 # M4 Layer D D7 rng/capture mode
+        battle_enforce_resim: @config.battle_enforce_resim.to_s }            # M4 Layer D D8 enforcement mode
     end
 
     # Zone-scoped presence: track each player's current map and fan a position

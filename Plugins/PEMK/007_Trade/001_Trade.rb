@@ -142,6 +142,10 @@ module PEMK
         finish(_INTL("The trade with {1} is complete!", name))
         (PEMK::Sync.mark_mon rescue nil)
         (PEMK::Checkpoint.request(:trade) rescue nil)   # urgent -> both sides persist within ~1s
+      elsif msg[:reason] == "unverified"
+        # D8: a freshly-caught wild mon whose battle is still being verified can't be
+        # traded yet (usually clears within seconds). Player-friendly, not an accusation.
+        finish(_INTL("That Pokémon was caught too recently to trade — please try again shortly."))
       else
         finish(_INTL("The trade could not be completed ({1}).", msg[:reason] || "error"))
       end

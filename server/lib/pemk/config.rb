@@ -11,7 +11,7 @@ module PEMK
                 :pickup_reset_allowed, :battle_data_path, :battle_enforce_teams,
                 :battle_enforce_encounters, :battle_enforce_catches, :battle_enforce_rewards,
                 :battle_enforce_exp, :battle_enforce_rng, :corpus_retention_days,
-                :anomaly_detection
+                :battle_enforce_resim, :resim_min_strikes, :anomaly_detection
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -111,6 +111,20 @@ module PEMK
       # (30, mirrored in BattleRecords::RETENTION_DAYS — config loads first).
       raw = env.fetch("PEMK_CORPUS_RETENTION_DAYS", "").to_s.strip
       @corpus_retention_days = raw.match?(/\A\d+\z/) ? raw.to_i : 30
+
+      # M4 Layer D D8: re-sim ENFORCEMENT — its OWN flag, per the operator contract
+      # (an existing rng=on can never silently become enforcement). off = nothing;
+      # shadow = the verdict sweep runs, logs + audits would_quarantine, changes no
+      # state; on = seeded catches are born provisional (walk-gated trade hold,
+      # fail-open TTL) and a walk-refuted catch auto-quarantines after MIN_STRIKES.
+      # Requires rng=on to have any effect (seeds/records are its inputs).
+      smode = env.fetch("PEMK_BATTLE_ENFORCE_RESIM", "off").to_s.strip.downcase
+      @battle_enforce_resim = %w[off shadow on].include?(smode) ? smode.to_sym : :off
+
+      # Distinct walk-refuted battles before quarantine arms for an account (aligned
+      # with D5's drift-tolerant calibration; 1 = immediate, harsher).
+      raw = env.fetch("PEMK_RESIM_MIN_STRIKES", "").to_s.strip
+      @resim_min_strikes = raw.match?(/\A[1-9]\d*\z/) ? raw.to_i : 2
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {

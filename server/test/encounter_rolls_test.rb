@@ -19,14 +19,16 @@ class EncounterRollsTest < Minitest::Test
     @db[:pickups].delete rescue nil
     @db[:monster_transfers].delete rescue nil
     @db[:monsters].delete rescue nil
+    @db[:enforcement_events].delete rescue nil
     @db[:accounts].delete
     @a = @db[:accounts].insert(email: "er-a@x.co", password_hash: "x", status: "active", created_at: Time.now)
     @b = @db[:accounts].insert(email: "er-b@x.co", password_hash: "x", status: "active", created_at: Time.now)
     @rolls = PEMK::EncounterRolls.new(@db)
     @logs  = []
-    @mons  = PEMK::Monsters.new(@db, { uid_req_max: 64, party_max: 6, level_max: 100 },
-                                logger: ->(m) { @logs << m }, rolls: @rolls)
+    @mons  = PEMK::Monsters.new(@db, CAPS, logger: ->(m) { @logs << m }, rolls: @rolls)
   end
+
+  CAPS = { uid_req_max: 64, party_max: 6, level_max: 100 }.freeze
 
   def teardown
     @db&.disconnect
@@ -39,12 +41,12 @@ class EncounterRollsTest < Minitest::Test
   # --- the roll lifecycle -----------------------------------------------------------
   def test_record_claim_and_caught_stamp
     @rolls.record(@a, MINT, 5, "LandNight")
-    assert_equal :wild, @rolls.claim(@a, "SPINARAK", 12_345)          # claimed, not caught
+    assert_equal :wild, @rolls.claim(@a, "SPINARAK", 12_345)[:label]  # claimed, not caught
     assert_nil @rolls.claim(@a, "SPINARAK", 12_345)                   # already claimed
 
     @rolls.record(@a, MINT, 5, "LandNight")                            # a second roll
     assert @rolls.mark_caught(@a, "SPINARAK", 12, 12_345)
-    assert_equal :wild_caught, @rolls.claim(@a, "SPINARAK", 12_345)
+    assert_equal :wild_caught, @rolls.claim(@a, "SPINARAK", 12_345)[:label]
   end
 
   def test_claim_is_account_scoped_and_identity_exact
@@ -52,7 +54,7 @@ class EncounterRollsTest < Minitest::Test
     assert_nil @rolls.claim(@b, "SPINARAK", 12_345)                   # another account
     assert_nil @rolls.claim(@a, "RATTATA", 12_345)                    # wrong species
     assert_nil @rolls.claim(@a, "SPINARAK", 99_999)                   # wrong pid
-    assert_equal :wild, @rolls.claim(@a, "SPINARAK", 12_345)          # species+pid match works
+    assert_equal :wild, @rolls.claim(@a, "SPINARAK", 12_345)[:label]  # species+pid match works
   end
 
   # Level is NOT part of the claim key: a mon that leveled between catch and (a delayed)
@@ -70,7 +72,59 @@ class EncounterRollsTest < Minitest::Test
     @rolls.record(@a, MINT, 5, "Land")                                 # uncaught roll (older)
     @rolls.record(@a, MINT, 5, "Land")                                 # second roll ...
     @rolls.mark_caught(@a, "SPINARAK", 12, 12_345)                     # ... stamped (newest uncaught)
-    assert_equal :wild_caught, @rolls.claim(@a, "SPINARAK", 12_345)
+    assert_equal :wild_caught, @rolls.claim(@a, "SPINARAK", 12_345)[:label]
+  end
+
+  # --- D8 STEP 2: the roll->mon link + birth states ----------------------------------
+
+  def test_claim_returns_seed_context_and_mint_stamps_the_link
+    @rolls.record(@a, MINT, 5, "Land", seed: 777)
+    @rolls.mark_caught(@a, "SPINARAK", 12, 12_345)
+    _, grants = @mons.mint_batch(@a, [entry(pid: 12_345)])
+    uid = grants[0][:uid]
+    roll = @db[:encounter_rolls].where(account_id: @a).first
+    assert_equal uid, roll[:claimed_monster_uid]           # the link, stamped in the claim
+    assert_equal 777, roll[:battle_seed]
+  end
+
+  def test_seeded_claim_births_provisional_when_resim_on
+    mons_on = PEMK::Monsters.new(@db, CAPS, rolls: @rolls, resim: :on)
+    @rolls.record(@a, MINT, 5, "Land", seed: 777)
+    @rolls.mark_caught(@a, "SPINARAK", 12, 12_345)
+    _, grants = mons_on.mint_batch(@a, [entry(pid: 12_345)])
+    row = @db[:monsters].where(id: grants[0][:uid]).first
+    assert_equal "provisional", row[:verify_state]
+    assert_equal "active", row[:status]                    # provisional, NOT quarantined
+  end
+
+  def test_condemned_roll_births_quarantined_when_resim_on
+    mons_on = PEMK::Monsters.new(@db, CAPS, rolls: @rolls, resim: :on)
+    @rolls.record(@a, MINT, 5, "Land", seed: 777)
+    @rolls.mark_caught(@a, "SPINARAK", 12, 12_345)
+    @db[:encounter_rolls].where(account_id: @a).update(condemned_at: Time.now)   # walk refuted it
+    _, grants = mons_on.mint_batch(@a, [entry(pid: 12_345)])
+    row = @db[:monsters].where(id: grants[0][:uid]).first
+    assert_equal "quarantined", row[:status]               # born condemned — no claim/verdict race
+    assert_equal "walk_mismatch", row[:quarantine_reason]
+    refute_nil row[:quarantined_at]
+    # the quarantine is attributable in the operator audit trail (the sweep never saw it)
+    assert_equal 1, @db[:enforcement_events].where(monster_uid: grants[0][:uid], kind: "quarantine").count
+  end
+
+  def test_unseeded_or_off_births_stay_none_active
+    # resim :off (the default @mons): seeded roll -> still none/active
+    @rolls.record(@a, MINT, 5, "Land", seed: 777)
+    _, grants = @mons.mint_batch(@a, [entry(pid: 12_345)])
+    row = @db[:monsters].where(id: grants[0][:uid]).first
+    assert_equal "none", row[:verify_state]
+    assert_equal "active", row[:status]
+
+    # resim :on but UNSEEDED roll (rng was off at mint time) -> none/active too
+    mons_on = PEMK::Monsters.new(@db, CAPS, rolls: @rolls, resim: :on)
+    @rolls.record(@b, MINT.merge("pid" => 55), 5, "Land")   # no seed
+    _, grants = mons_on.mint_batch(@b, [entry(pid: 55)])
+    row = @db[:monsters].where(id: grants[0][:uid]).first
+    assert_equal "none", row[:verify_state]
   end
 
   # Boot retention: stale never-fought rolls are pruned; caught/claimed rows are kept.
