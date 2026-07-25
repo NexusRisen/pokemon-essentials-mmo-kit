@@ -36,6 +36,13 @@ module PEMK
 
     FABRICATED_WILD_MIN = 5   # >= this many client-origin wild-table mons to report
 
+    # D7 part 3 — evasion-by-silence: caught seeded encounters whose battle record
+    # never arrived. Only accounts that have EVER sent a record are judged (an old
+    # client without the recorder plugin sends none — a mixed fleet must not flag);
+    # a grace period covers in-flight/disconnect losses.
+    SILENT_SEEDED_MIN = 5
+    SILENT_GRACE_SEC  = 3600
+
     def initialize(db, world, logger: nil)
       @db    = db
       @world = world
@@ -56,7 +63,7 @@ module PEMK
     # The periodic aggregation: recompute both signals and refresh the review queue.
     # -> number of reports written/updated. Runs on a worker thread.
     def sweep(now: Time.now)
-      n = sweep_flags(now) + sweep_provenance(now)
+      n = sweep_flags(now) + sweep_provenance(now) + sweep_rng_silence(now)
       @log.call("anomaly: sweep refreshed #{n} report(s)") if n.positive?
       n
     rescue StandardError => e
@@ -111,6 +118,31 @@ module PEMK
       out = {}
       ds.group_and_count(:issuer_account_id).each { |r| out[r[:issuer_account_id]] = r[:count] }
       out
+    end
+
+    # D7 part 3: a CAUGHT seeded encounter proves the battle concluded; a missing
+    # battle record then means the client withheld it (walk/replay evasion by
+    # silence). Judged only for record-capable accounts, past the grace window.
+    def sweep_rng_silence(now)
+      return 0 unless @db.table_exists?(:battle_records)
+
+      capable = @db[:battle_records].distinct.select(:account_id)
+      silent = @db[:encounter_rolls]
+               .exclude(battle_seed: nil)
+               .exclude(caught_at: nil)
+               .where(account_id: capable)
+               .where { created_at < now - SILENT_GRACE_SEC }
+               .exclude(id: @db[:battle_records].exclude(encounter_roll_id: nil).select(:encounter_roll_id))
+
+      count = 0
+      silent.group_and_count(:account_id).each do |r|
+        next unless r[:count] >= SILENT_SEEDED_MIN
+
+        upsert_report(r[:account_id], "rng_silent", r[:count],
+                      "#{r[:count]} caught seeded encounters with no battle record", now)
+        count += 1
+      end
+      count
     end
 
     # Idempotent: refresh score/detail/updated_at, keep created_at and an operator's

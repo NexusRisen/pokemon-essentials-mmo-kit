@@ -64,3 +64,23 @@ total = rows.length
 puts format("replay: done — %d match / %d mismatch / %d error of %d (parity %.1f%%)",
             tally[:match], tally[:mismatch], tally[:error], total,
             total.zero? ? 0.0 : (100.0 * tally[:match] / total))
+
+# --- D7 part 3: whole-corpus parity report -----------------------------------
+puts "corpus: status breakdown"
+db[:battle_records].group_and_count(:replay_status, :mode)
+                   .order(:replay_status, :mode).each do |r|
+  puts format("  %-16s %-8s %d", r[:replay_status], r[:mode], r[:count])
+end
+
+# Per engine-build cohort: parity = match / (match + mismatch). A cohort whose
+# parity collapses is a fork/version drift (or a cheat cluster) — part 3's core
+# triage signal.
+puts "corpus: parity by engine cohort"
+db[:battle_records].where(replay_status: %w[match mismatch])
+                   .group_and_count(:engine_fp, :replay_status).all
+                   .group_by { |r| r[:engine_fp] }.each do |fp, rs|
+  m  = rs.find { |r| r[:replay_status] == "match" }&.fetch(:count) || 0
+  mm = rs.find { |r| r[:replay_status] == "mismatch" }&.fetch(:count) || 0
+  puts format("  %-18s %4d match / %4d mismatch (%.1f%%)",
+              (fp || "unknown")[0, 16], m, mm, m + mm > 0 ? 100.0 * m / (m + mm) : 0.0)
+end

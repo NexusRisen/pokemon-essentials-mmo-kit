@@ -118,6 +118,15 @@ module PEMK
       rescue StandardError => e
         @log.call("server: encounter-roll prune failed #{e.class}: #{e.message}")
       end
+      # D7 part 3: corpus retention — matched records are spent; evidence is kept.
+      if @battle_records
+        begin
+          pruned = @battle_records.prune(days: @config.corpus_retention_days)
+          @log.call("server: pruned #{pruned} matched battle record(s) (>#{@config.corpus_retention_days}d)") if pruned.positive?
+        rescue StandardError => e
+          @log.call("server: battle-record prune failed #{e.class}: #{e.message}")
+        end
+      end
       if @config.battle_enforce_catches == :on && @config.battle_enforce_encounters != :on
         @log.call("server: WARNING catch enforcement is on but encounter enforcement is #{@config.battle_enforce_encounters} — catches need a server encounter mint, so they will all fail-open to local")
       end

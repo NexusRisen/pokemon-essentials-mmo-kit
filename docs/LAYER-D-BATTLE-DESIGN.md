@@ -193,9 +193,30 @@
 > override was dead code). Honest limits: verdict granularity is end-state (PP burned /
 > items consumed mid-battle are not compared — part 3 can tighten); `$bag` is empty (Exp
 > All-class items uncaptured — a bench-EXP mismatch will surface them); replay needs the
-> game repo's Data/ (server-only deployments skip the harness test). Next: **D7 part 3** —
-> parity at scale (batch stats, corpus retention/pruning, the granted-but-recordless sweep)
-> — then the D8 decision.
+> game repo's Data/ (server-only deployments skip the harness test). **In-game validation
+> then covered the hardened paths on purpose: a 5-round multi-ball catch, a flee, a
+> 7-round faint+switch battle — 9/9 real-battle parity, the two hardest frozen as suite
+> fixtures.** Next: **D7 part 3** — parity at scale (batch stats, corpus
+> retention/pruning, the granted-but-recordless sweep) — then the D8 decision.
+
+> **Progress (2026-07-25): D7 part 3 shipped (parity at scale — D7 COMPLETE).**
+> (1) **Corpus retention**, the promise made to operators: at boot the server prunes
+> `match` records older than `PEMK_CORPUS_RETENTION_DAYS` (default 30, 0 = keep forever)
+> — matched records are *spent* proof; every other status (`mismatch`/`walk_mismatch`/
+> `no_log`/`mode_mismatch`/`error`/pending) is EVIDENCE and is never auto-pruned.
+> (2) **The evasion-by-silence sweep** (D5): a CAUGHT seeded encounter proves its battle
+> concluded — if no battle record ever arrived, the client withheld it. Reported as
+> `rng_silent` only for accounts that have EVER sent a record (an old client without the
+> recorder plugin sends none — a mixed fleet must not flag) and past a 1-hour grace
+> window (crash/disconnect losses). ≥5 silent caught mints → review-queue report.
+> (3) **Corpus parity report** in `bin/pemk_replay.rb`: status×mode breakdown + parity
+> per `engine_fp` cohort — a cohort whose parity collapses is version drift or a cheat
+> cluster. (Validated live: the day's two client builds appear as two cohorts, both
+> 100%.) 343 tests green. **D7 (parts 1-3) is COMPLETE**: unforgeable seeded RNG,
+> walk-verified capture, headless re-simulation at proven 100% real-battle parity, and
+> the operational loop to run it at scale. The engine tier's enabling milestone is done —
+> next decision: **D8** (per-turn PvE re-sim with REJECTION, under its own
+> `PEMK_BATTLE_ENFORCE_RESIM` flag per the operator contract) or D9 groundwork.
 
 This document answers the last open question in the anti-cheat ladder: **how does
 the server independently decide what a battle produced — the Pokémon that
