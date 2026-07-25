@@ -25,7 +25,10 @@ module PEMK
       "reward_level"        => 4,    # impossible party level jumps
       "catch_spam"          => 3,    # 21+ throws brute-forcing one mint
       "encounter_species"   => 5,    # locally-rolled a species not in the map table
-      "encounter_wrong_map" => 8     # claimed an encounter on a map they're not on
+      "encounter_wrong_map" => 8,    # claimed an encounter on a map they're not on
+      "exp_rollback"        => 3     # a mon's EXP dropped below its high-water (D6); latched
+                                     # to 1 flag per episode, so 3 = 3 distinct rollback events
+                                     # (a lone no-fault crash-restore is 1 and won't surface)
     }.freeze
 
     FABRICATED_WILD_MIN = 5   # >= this many client-origin wild-table mons to report

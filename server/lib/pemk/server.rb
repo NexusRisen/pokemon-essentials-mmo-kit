@@ -64,6 +64,8 @@ module PEMK
       @anomaly = AnomalyDetector.new(@db, @world, logger: @log) if @config.anomaly_detection
       @last_anomaly_sweep = nil
       @anomaly_sweeping   = false
+      # M4 Layer D D6: per-mon EXP high-water + rollback detection (part 1).
+      @monster_stats = MonsterStats.new(@db) if @config.battle_enforce_exp != :off
       @audit      = Audit.new(@world, logger: @log)
       @pos_audit  = PositionAudit.new(@world, logger: @log, mode: @config.position_enforcement)   # M4 Layer B
       @pickups    = Pickups.new(@db)   # M4 Layer C one-shot ledger
@@ -97,6 +99,7 @@ module PEMK
       @log.call("server: catch enforcement = #{@config.battle_enforce_catches} (M4 Layer D D3)")
       @log.call("server: reward enforcement = #{@config.battle_enforce_rewards} (M4 Layer D D4, detection-only)")
       @log.call("server: anomaly detection = #{@config.anomaly_detection ? 'on' : 'off'} (M4 Layer D D5, review-queue only)")
+      @log.call("server: exp authority = #{@config.battle_enforce_exp} (M4 Layer D D6, detection-only)")
       if @config.battle_enforce_rewards != :off && @config.battle_enforce_encounters != :on
         @log.call("server: WARNING reward detection is on but encounter enforcement is #{@config.battle_enforce_encounters} — no foe context, so battle windows can't open")
       end
@@ -355,8 +358,25 @@ module PEMK
       reward_check_levels(conn, account_id, mons) if @reward_audit
       @mailbox.submit(account_id) do
         status = @monsters.apply_party(account_id, mons, seq)
+        observe_exp(account_id, mons)   # D6: per-mon EXP high-water + rollback detection
         @reactor.post { reply(conn, type: :mon_ack, seq: seq, flagged: status[1].any?) }
       end
+    end
+
+    # D6 part 1 (in the mailbox): track each owned mon's EXP high-water and flag a rollback
+    # (reported EXP below it = old save / edit). Detection-only; feeds the D5 review queue.
+    def observe_exp(account_id, mons)
+      return unless @monster_stats && mons.is_a?(Array)
+
+      entries = mons.map { |m| { uid: m[:uid], exp: m[:exp], level: m[:level] } if m.is_a?(Hash) }.compact
+      rollbacks = @monster_stats.observe(account_id, entries)
+      return if rollbacks.empty?
+
+      brief = rollbacks.map { |r| "uid#{r[:uid]} #{r[:from]}->#{r[:to]}" }.join(", ")
+      @log.call("exp: account #{account_id} SUSPECT rollback #{brief} (reported EXP below high-water)")
+      flag_anomaly(account_id, :exp_rollback)
+    rescue StandardError => e
+      @log.call("exp: observe failed #{e.class}: #{e.message}")
     end
 
     # M4 Layer D D4: the client reports a wild battle's end (outcome + the foes it

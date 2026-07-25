@@ -10,7 +10,7 @@ module PEMK
                 :monster_caps, :world_path, :position_enforcement, :pickup_enforce,
                 :pickup_reset_allowed, :battle_data_path, :battle_enforce_teams,
                 :battle_enforce_encounters, :battle_enforce_catches, :battle_enforce_rewards,
-                :anomaly_detection
+                :battle_enforce_exp, :anomaly_detection
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -86,6 +86,13 @@ module PEMK
       # counters need their source checks active (rewards!=off, encounters!=off). D5 alone
       # (everything else off) is inert.
       @anomaly_detection = env.fetch("PEMK_ANOMALY_DETECTION", "off").to_s.strip.downcase == "on"
+
+      # M4 Layer D D6: per-mon EXP authority. off = nothing; shadow = the server tracks each
+      # owned mon's EXP high-water from the party projection and flags a ROLLBACK (reported
+      # EXP below the high-water = old save / edit); on = (part 2) reconcile the client's
+      # party to the server EXP at login. Default off. Detection-only in part 1.
+      xmode = env.fetch("PEMK_BATTLE_ENFORCE_EXP", "off").to_s.strip.downcase
+      @battle_enforce_exp = %w[off shadow on].include?(xmode) ? xmode.to_sym : :off
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {
