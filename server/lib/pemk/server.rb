@@ -47,7 +47,7 @@ module PEMK
       @monsters   = Monsters.new(@db, @config.monster_caps, logger: @log,
                                  rolls: (@config.battle_enforce_encounters == :on ? @encounter_rolls : nil),
                                  resim: @config.battle_enforce_resim)   # D8: birth states
-      @trades     = Trades.new(@db)
+      @trades     = Trades.new(@db, resim: @config.battle_enforce_resim)   # D8: provisional trade hold
       # M4 Layer A: read-only world model + detection-only interaction audit. Both are
       # in-memory and DB-free; a missing export just makes the audit a no-op.
       @world      = WorldData.new(@config.world_path, logger: @log)

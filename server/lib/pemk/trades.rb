@@ -19,8 +19,11 @@ module PEMK
   #    swap an idempotent no-op.
   # NOT secured here (M4): the traded Pokémon OBJECT's stat/acquisition legality.
   class Trades
-    def initialize(db)
-      @db = db
+    HOLD_TTL_SEC = 3600   # D8: fail-open window for a provisional catch's trade hold
+
+    def initialize(db, resim: :off)
+      @db    = db
+      @resim = resim   # D8: :on adds the provisional trade hold (walk-gated release)
     end
 
     # -> [:ok, {a_recv:, b_recv:}] | [:ok_replay, {a_recv:, b_recv:}] | [:abort, reason]
@@ -34,6 +37,16 @@ module PEMK
 
         all_uids = (a_gives + b_gives).uniq.sort
         @db[:monsters].where(id: all_uids).order(:id).for_update.select(:id).all  # LOCK ascending -> deadlock-free
+
+        # D8: a seeded catch is provisional until its battle record's seed WALK clears
+        # (usually seconds) — held from trades so a to-be-condemned mon can't be
+        # laundered onto a partner inside the verdict window. Quarantined mons are
+        # already blocked by the CAS (status='active'); this covers the pre-verdict
+        # window, TTL fail-open so a dead harness never bricks trading.
+        if @resim == :on && held_provisional?(all_uids, now)
+          result = [:abort, :unverified]
+          raise Sequel::Rollback
+        end
 
         moved = 0
         rows  = []
@@ -62,6 +75,24 @@ module PEMK
 
     def xfer(trade_id, uid, from, to, now)
       { uid: uid, from_account_id: from, to_account_id: to, trade_id: trade_id, created_at: now }
+    end
+
+    # Any provisional uid whose seed walk hasn't cleared? (trade_max=1 -> <=2 uids).
+    # Released as soon as the bound record ingests a non-refuting walk; held while
+    # the record is still pending (or refuted), until the fail-open TTL.
+    def held_provisional?(uids, now)
+      prov = @db[:monsters].where(id: uids, verify_state: "provisional").select_map(:id)
+      prov.any? do |uid|
+        roll = @db[:encounter_rolls].where(claimed_monster_uid: uid).order(Sequel.desc(:id)).first
+        status = roll && @db[:battle_records].where(encounter_roll_id: roll[:id]).order(Sequel.desc(:id)).get(:replay_status)
+        if status == "walk_mismatch"
+          true                                                   # condemned — hold hard (pre-quarantine window)
+        elsif status.nil? || status == "pending"
+          !roll || !roll[:caught_at] || (now - roll[:caught_at]) < HOLD_TTL_SEC   # not walk-cleared -> hold within TTL
+        else
+          false                                                  # walk ran, didn't refute -> released
+        end
+      end
     end
 
     def replay_view(trade_id, a, b)

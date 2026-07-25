@@ -78,6 +78,66 @@ class TradesTest < Minitest::Test
     assert_equal @b, owner(ub)
   end
 
+  # D8: quarantined mons (status != active) are blocked by the EXISTING CAS —
+  # zero trade-code change, works even with resim off.
+  def test_quarantined_mon_cannot_be_traded
+    ua = mint(@a, "PIKACHU", 1, status: "quarantined")
+    ub = mint(@b, "EEVEE", 2)
+    st, = @trades.execute_trade("tq", a: @a, b: @b, a_gives: [ua], b_gives: [ub])
+    assert_equal :abort, st
+    assert_equal @a, owner(ua)
+  end
+
+  # D8 STEP 5: the provisional trade hold (resim :on) — walk-gated release.
+  def provisional_catch(owner_acct, nonce, walk_status:, caught_age: 60)
+    uid = mint(owner_acct, "PIDGEY", nonce)
+    @db[:monsters].where(id: uid).update(verify_state: "provisional")
+    caught = Time.now - caught_age
+    roll = @db[:encounter_rolls].insert(account_id: owner_acct, species: "PIDGEY", level: 5, pid: nonce,
+                                        iv: Sequel.pg_jsonb([0] * 6), shiny: false, map: 5, enctype: "Land",
+                                        battle_seed: 900 + nonce, caught_at: caught, claimed_at: caught,
+                                        claimed_monster_uid: uid, created_at: caught)
+    if walk_status
+      @db[:battle_records].insert(account_id: owner_acct, encounter_roll_id: roll, mode: "on",
+                                  record: Sequel.blob("x"), replay_status: walk_status, created_at: caught)
+    end
+    uid
+  end
+
+  def test_provisional_pending_walk_is_held_within_ttl
+    trades = PEMK::Trades.new(@db, resim: :on)
+    ua = provisional_catch(@a, 1, walk_status: "pending", caught_age: 60)   # fresh, walk not run
+    ub = mint(@b, "EEVEE", 2)
+    st, reason = trades.execute_trade("th1", a: @a, b: @b, a_gives: [ua], b_gives: [ub])
+    assert_equal :abort, st
+    assert_equal :unverified, reason
+    assert_equal @a, owner(ua)                                             # nothing moved
+  end
+
+  def test_provisional_walk_cleared_is_tradeable
+    trades = PEMK::Trades.new(@db, resim: :on)
+    ua = provisional_catch(@a, 1, walk_status: "walk_ok")                  # walk ran, didn't refute
+    ub = mint(@b, "EEVEE", 2)
+    st, = trades.execute_trade("th2", a: @a, b: @b, a_gives: [ua], b_gives: [ub])
+    assert_equal :ok, st
+    assert_equal @b, owner(ua)                                             # released
+  end
+
+  def test_provisional_pending_past_ttl_fails_open
+    trades = PEMK::Trades.new(@db, resim: :on)
+    ua = provisional_catch(@a, 1, walk_status: "pending", caught_age: 7_200)   # >1h, harness dead
+    ub = mint(@b, "EEVEE", 2)
+    st, = trades.execute_trade("th3", a: @a, b: @b, a_gives: [ua], b_gives: [ub])
+    assert_equal :ok, st, "fail-open: a dead harness must never brick trading forever"
+  end
+
+  def test_provisional_hold_is_off_when_resim_off
+    ua = provisional_catch(@a, 1, walk_status: "pending", caught_age: 60)
+    ub = mint(@b, "EEVEE", 2)
+    st, = @trades.execute_trade("th4", a: @a, b: @b, a_gives: [ua], b_gives: [ub])   # default resim :off
+    assert_equal :ok, st
+  end
+
   def test_replay_is_idempotent_no_double_swap
     ua = mint(@a, "PIKACHU", 1)
     ub = mint(@b, "EEVEE", 2)
