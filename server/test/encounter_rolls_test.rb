@@ -85,6 +85,17 @@ class EncounterRollsTest < Minitest::Test
     assert_equal [2, 3], pids
   end
 
+  # D7: a roll a battle record references must survive the prune — deleting it would
+  # SET NULL the record's binding and re-open the seed's single-use constraint.
+  def test_prune_keeps_rolls_referenced_by_battle_records
+    old = Time.now - (10 * 86_400)
+    id = @rolls.record(@a, MINT.merge("pid" => 9), 5, "Land", seed: 4242, now: old)  # stale, unfought...
+    @db[:battle_records].insert(account_id: @a, encounter_roll_id: id, mode: "shadow",
+                                record: Sequel.blob("x"), replay_status: "pending", created_at: old)
+    assert_equal 0, @rolls.prune                                       # ...but corpus-bound -> kept
+    assert_equal 1, @db[:encounter_rolls].where(id: id).count
+  end
+
   def test_mark_caught_needs_an_uncaught_roll
     refute @rolls.mark_caught(@a, "SPINARAK", 12, 12_345)             # nothing recorded
     @rolls.record(@a, MINT, 5, "Land")

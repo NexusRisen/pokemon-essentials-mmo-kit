@@ -124,6 +124,49 @@
 > judging (D4/D6 exemption paths) needs growth CURVES in battle_data.json — re-run the F9
 > "PEMK: Export Battle Data" if your export predates D4.**
 
+> **Progress (2026-07-25): D7 part 1 shipped (the engine tier's deterministic seam).**
+> **STEP-0 GATE PASSED:** the unmodified v21.1 battle engine runs HEADLESS on plain MRI —
+> real 3v3 AI-vs-AI battles to decision in ~30 ms, and same-seed runs in separate processes
+> produce byte-identical transcripts. The reuse-not-reimplement thesis is empirically
+> validated; the ordered 109-file load list + 327-line stub inventory live in
+> `server/harness/spike/` (part 2's skeleton). Traps recorded: `PBDebug.logonerr` SWALLOWS
+> exceptions (a broken headless battle silently plays ~100 empty rounds — the harness must
+> make it fatal), `$game_switches` is read every AI command phase, `nil_or_empty?`/`validate`
+> are required Kernel functions, `Player` must load even for NPC-only battles.
+> **Shipped:** `protocol/pemk_prng.rb` — canonical PCG32 validated against O'Neill's
+> reference vectors, pure Integer math (bit-identical MRI/mkxp-z), domain-separated streams
+> (battle/AI/run), unbiased `rand_below`, vendored byte-identical to the plugin (test-
+> enforced). `PEMK_BATTLE_ENFORCE_RNG` off/shadow/on (default off; **rejection is D8's own
+> separate flag — an operator's `on` here can never silently become enforcement**). A 63-bit
+> seed is born with each D2 mint and rides `:encounter_grant`. Client `010_BattleRng`:
+> shadow RECORDS any single-foe wild battle (Safari excluded — it overrides `pbRandom`);
+> `on` DERIVES all draws from the seed's streams, latched at arm time. Capture = per-round
+> `@choices` snapshot at END of `pbCommandPhase` (slots are ACT-dependent — encoded by TYPE;
+> a positional filter would drop every thrown ball's item id, review-caught) + `@megaEvolution`
+> + forced switches + `pbRun` events (the "Use next Pokémon?"→No path is otherwise invisible)
+> + init frames (TeamReport-shaped) + outcome at `pbEndOfBattle` ENTRY (pre-Pokérus/form-reset)
+> + per-stream packed (bound,value) logs, counts, FNV-1a64 fps. Server: `battle_records`
+> corpus (raw body stored VERBATIM for part-2 replay; single-use-per-roll as a DB constraint;
+> hourly ingest cap) and **THE SEED WALK** — for bound `on` records the server re-derives
+> every draw from its own seed and compares value-by-value, cross-checking env counters and
+> fps against the body; results persist as DISTINCT statuses (`walk_ok`/`walk_skipped`/
+> `no_log`/`walk_mismatch`/`mode_mismatch`) so log-stripping evasion is as visible as
+> failure; a mismatch feeds D5 `rng_desync` (threshold 3). Fabricated favorable rolls are
+> now mathematically refutable.
+> **Honest limits (all deliberate):** part 1 is INSTRUMENTATION — a modified client can
+> ignore the seed, claim `desynced`, truncate, or send nothing; each evasion is *visible*
+> (statuses, D5, and part 3's granted-but-recordless sweep) but nothing rejects until D8.
+> Seed-at-grant gives lookahead within one wild battle (accepted for PvE; D9 PvP will use
+> commit-reveal). The un-logged tail beyond 4096 draws/stream is unverifiable by the walk
+> (part-2 replay covers it). `engine_fp` is inventory-level (path+size; compiled games
+> degrade to dats+plugins). Ball-throw provenance (server vs local-fallback shakes) is
+> reconstructible by joining D3's persisted rolls — part 2 should add the per-throw event.
+> A `mode_mismatch` can be an honest pre-flip session (mode adopts at login) — logged, never
+> flagged. **Operators: plan `battle_records` retention before running shadow at scale
+> (worst case ~30 MiB/hour/account at the cap; a prune job lands with part 3).**
+> Next: **D7 part 2** — the MRI headless harness (from the spike skeleton) + replay of
+> corpus records; then part 3 (parity measurement at scale).
+
 This document answers the last open question in the anti-cheat ladder: **how does
 the server independently decide what a battle produced — the Pokémon that
 appears, the one you catch, the EXP/money/drops you earn, and who wins a ranked

@@ -1,0 +1,199 @@
+# frozen_string_literal: true
+
+module PEMK
+  # M4 Layer D D7 part 1: the battle-record CORPUS ingest. The client's
+  # :battle_record frame carries triage metadata in the primitive envelope and
+  # the full record as an opaque primitive-encoded BODY — stored VERBATIM
+  # (bytea) for part 2's headless replay; nothing here ever decodes the body
+  # beyond a size gate, and nothing here rejects a battle (instrumentation).
+  #
+  # Seed binding: a record claiming a battle_seed must match a roll the server
+  # minted FOR THIS ACCOUNT; the partial unique index on encounter_roll_id makes
+  # the seed single-use (a second record for the same roll is dropped as a dup).
+  # A record with no/unknown seed still ingests (shadow's broad corpus) — just
+  # unbound. Runs under the per-account mailbox.
+  class BattleRecords
+    BODY_MAX   = 256 * 1024   # raw record cap (well above a truncated max record)
+    MODES      = %w[shadow on].freeze
+    HEX16      = /\A\h{16}\z/.freeze
+    DRAWS_MAX  = 1_000_000    # sanity for the promoted counters
+    HOURLY_CAP = 120          # records per account per hour (spam/storage bound —
+                              # nobody finishes more wild battles than this honestly)
+
+    def initialize(db, mode: :off, logger: nil)
+      @db   = db
+      @mode = mode   # the SERVER's configured rng mode (masquerade detection)
+      @log  = logger || ->(_m) {}
+    end
+
+    # -> :ok | :desync | :dup | :bad — telemetry only; the client gets no reply either
+    # way (:desync = ingested, but the seed walk refuted the claimed draws).
+    def ingest(account_id, env, body, now: Time.now)
+      return :bad unless body.is_a?(String) && !body.empty? && body.bytesize <= BODY_MAX
+
+      mode = env[:mode].to_s
+      return :bad unless MODES.include?(mode)
+
+      # storage bound: an account can't grow the corpus faster than honest play
+      recent = @db[:battle_records].where(account_id: account_id)
+                                   .where { created_at > now - 3600 }.count
+      if recent >= HOURLY_CAP
+        @log.call("battlerec: account #{account_id} over the hourly record cap -> dropped")
+        return :bad
+      end
+
+      roll_id = nil
+      seed = env[:battle_seed]
+      if seed.is_a?(Integer) && seed.positive?
+        roll_id = @db[:encounter_rolls].where(account_id: account_id, battle_seed: seed).get(:id)
+        # an unknown seed is recorded UNBOUND, and loudly — either a stale relogin
+        # or a fabricated claim; part 3's parity stats treat unbound `on` records
+        # as first-class suspects.
+        @log.call("battlerec: account #{account_id} claimed unknown seed #{seed} (recording unbound)") unless roll_id
+      end
+
+      # THE SEED WALK — the part-1 security check. An `on` record bound to a roll
+      # claims its draws came from the seed's PCG32 streams: re-walk each stream over
+      # the packed (bound, value) log and compare value-by-value, cross-checking the
+      # promoted env counters/fps against the body. A mismatch means the client did
+      # NOT draw from the seed (fabricated rolls, or an engine fork drawing
+      # differently) — recorded, logged, D5-flagged, never rejected. Walk results
+      # persist as DISTINCT statuses so an evasion (omitting logs) is as visible as
+      # a failure (review-caught: :ok and :skipped both landing on "pending" made
+      # log-stripping silent).
+      walk = :unbound
+      if roll_id
+        if mode == "on"
+          walk = verify_walk(account_id, seed, env, body)
+        elsif @mode == :on
+          # A roll-bound record claiming "shadow" under an `on` server: a modified
+          # client dodging the walk — or an honest session from before an operator
+          # flipped shadow->on (mode adopts at login). Distinct status, loud log,
+          # NO flag (the honest case exists).
+          walk = :mode_mismatch
+          @log.call("battlerec: account #{account_id} bound record claims shadow under an on server (mode_mismatch)")
+        end
+      end
+
+      @db[:battle_records].insert(
+        account_id:        account_id,
+        encounter_roll_id: roll_id,
+        mode:              mode,
+        battle_seed:       (seed.is_a?(Integer) && seed.positive? ? seed : nil),
+        engine_fp:         str_or_nil(env[:engine_fp], 64),
+        record:            Sequel.blob(body),
+        outcome:           int_in(env[:outcome], 0..5),
+        rounds:            int_in(env[:rounds], 0..100_000),
+        draws_battle:      int_in(env[:draws_battle], 0..DRAWS_MAX),
+        draws_ai:          int_in(env[:draws_ai], 0..DRAWS_MAX),
+        draws_run:         int_in(env[:draws_run], 0..DRAWS_MAX),
+        fp_battle:         fp_or_nil(env[:fp_battle]),
+        fp_ai:             fp_or_nil(env[:fp_ai]),
+        fp_run:            fp_or_nil(env[:fp_run]),
+        replay_status:     WALK_STATUS.fetch(walk, "pending"),
+        created_at:        now
+      )
+      walk == :mismatch ? :desync : :ok
+    rescue Sequel::UniqueConstraintViolation
+      @log.call("battlerec: account #{account_id} duplicate record for roll #{roll_id} -> dropped")
+      :dup
+    rescue StandardError => e
+      @log.call("battlerec: ingest failed #{e.class}: #{e.message}")
+      :bad
+    end
+
+    private
+
+    # Streams to walk: record-hash key -> [PRNG stream id, env counter key].
+    WALK_STREAMS = { b: [Prng::STREAM_BATTLE, :draws_battle],
+                     a: [Prng::STREAM_AI,     :draws_ai],
+                     r: [Prng::STREAM_RUN,    :draws_run] }.freeze
+
+    WALK_STATUS = { unbound: "pending", ok: "walk_ok", empty: "walk_skipped",
+                    no_log: "no_log", mismatch: "walk_mismatch",
+                    mode_mismatch: "mode_mismatch" }.freeze
+
+    MAX_LOGGED = 4096   # the client's per-stream packed-log cap (mirror)
+
+    # -> :ok | :mismatch | :empty | :no_log
+    #   :empty  = the record claims zero draws everywhere (trivial battle) — fine.
+    #   :no_log = counters claim draws but the logs are absent/undecodable — walk
+    #             EVADED; distinct status so part 3 ranks these next to mismatches.
+    # Cross-checks (a lie about the record is a mismatch): env counter == body
+    # stream :n; log pair-count == min(n, cap) unless truncated; recomputed FNV of
+    # the walked pairs == the body fp when the log is complete.
+    def verify_walk(account_id, seed, env, body)
+      rec = Wire.decode_primitive(body)
+      draws = rec.is_a?(Hash) && rec[:draws].is_a?(Hash) ? rec[:draws] : nil
+      claimed_total = WALK_STREAMS.values.sum { |_, ck| env[ck].to_i }
+      return (claimed_total.zero? ? :empty : :no_log) unless draws
+
+      truncated = rec[:truncated] == true
+      any_log = false
+      WALK_STREAMS.each do |key, (stream_id, env_key)|
+        s = draws[key]
+        next unless s.is_a?(Hash)
+
+        n   = s[:n].to_i
+        log = s[:log].is_a?(String) ? s[:log] : "".b
+        return fail_walk(account_id, key, "env counter #{env[env_key].inspect} != body n #{n}") if env[env_key].to_i != n
+        next if n.zero? && log.empty?
+
+        return fail_walk(account_id, key, "log absent for #{n} claimed draws") if log.empty?
+        return fail_walk(account_id, key, "ragged log") unless (log.bytesize % 8).zero?
+
+        pairs = log.unpack("N*")
+        count = pairs.length / 2
+        return fail_walk(account_id, key, "log has #{count} pairs, expected #{[n, MAX_LOGGED].min}") \
+          if !truncated && count != [n, MAX_LOGGED].min
+
+        any_log = true
+        prng = Prng.new(seed, stream_id)
+        fp   = FNV_OFFSET
+        count.times do |i|
+          bound, claimed = pairs[2 * i], pairs[2 * i + 1]
+          derived = prng.rand_below(bound)
+          return fail_walk(account_id, key, "draw #{i} bound #{bound}: claimed #{claimed}, seed derives #{derived}") \
+            unless derived == claimed
+
+          fp = fold32(fold32(fp, bound), claimed)
+        end
+        # a complete log's fingerprint is recomputable — a divergent one is a lie
+        if !truncated && count == n && s[:fp].is_a?(String) && s[:fp] != format("%016x", fp)
+          return fail_walk(account_id, key, "fp #{s[:fp]} != recomputed #{format('%016x', fp)}")
+        end
+      end
+      return :empty if claimed_total.zero? && !any_log   # trivial 0-draw battle
+
+      any_log ? :ok : :no_log
+    end
+
+    def fail_walk(account_id, stream, detail)
+      @log.call("battlerec: account #{account_id} SUSPECT rng desync stream #{stream} — #{detail}")
+      :mismatch
+    end
+
+    FNV_OFFSET = 0xcbf29ce484222325
+    FNV_PRIME  = 0x100000001b3
+    M64        = (1 << 64) - 1
+
+    def fold32(h, v32)
+      [v32].pack("N").each_byte { |b| h = ((h ^ b) * FNV_PRIME) & M64 }
+      h
+    end
+
+    def str_or_nil(v, max)
+      s = v.to_s
+      s.empty? || s.length > max ? nil : s
+    end
+
+    def int_in(v, range)
+      v.is_a?(Integer) && range.cover?(v) ? v : nil
+    end
+
+    def fp_or_nil(v)
+      s = v.to_s
+      HEX16.match?(s) ? s : nil
+    end
+  end
+end

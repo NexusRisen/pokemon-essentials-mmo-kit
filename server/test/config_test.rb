@@ -107,6 +107,16 @@ class ConfigTest < Minitest::Test
     assert_equal :off,    PEMK::Config.new(env: ENV.to_h.merge("PEMK_BATTLE_ENFORCE_EXP" => "junk")).battle_enforce_exp
   end
 
+  # M4 Layer D D7 part 1: the deterministic battle seam, off/shadow/on, default off.
+  def test_battle_enforce_rng_defaults_off_and_reads_env
+    env = ENV.to_h
+    env.delete("PEMK_BATTLE_ENFORCE_RNG")
+    assert_equal :off,    PEMK::Config.new(env: env).battle_enforce_rng
+    assert_equal :shadow, PEMK::Config.new(env: ENV.to_h.merge("PEMK_BATTLE_ENFORCE_RNG" => "shadow")).battle_enforce_rng
+    assert_equal :on,     PEMK::Config.new(env: ENV.to_h.merge("PEMK_BATTLE_ENFORCE_RNG" => "ON")).battle_enforce_rng
+    assert_equal :off,    PEMK::Config.new(env: ENV.to_h.merge("PEMK_BATTLE_ENFORCE_RNG" => "junk")).battle_enforce_rng
+  end
+
   # M4 Layer D D5: anomaly detection, binary on/off, default off.
   def test_anomaly_detection_defaults_off_and_reads_env
     env = ENV.to_h

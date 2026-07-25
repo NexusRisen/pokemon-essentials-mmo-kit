@@ -10,7 +10,7 @@ module PEMK
                 :monster_caps, :world_path, :position_enforcement, :pickup_enforce,
                 :pickup_reset_allowed, :battle_data_path, :battle_enforce_teams,
                 :battle_enforce_encounters, :battle_enforce_catches, :battle_enforce_rewards,
-                :battle_enforce_exp, :anomaly_detection
+                :battle_enforce_exp, :battle_enforce_rng, :anomaly_detection
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -95,6 +95,15 @@ module PEMK
       # crash's earned-but-lost EXP is given back). Default off.
       xmode = env.fetch("PEMK_BATTLE_ENFORCE_EXP", "off").to_s.strip.downcase
       @battle_enforce_exp = %w[off shadow on].include?(xmode) ? xmode.to_sym : :off
+
+      # M4 Layer D D7 part 1: the deterministic battle seam. off = nothing; shadow = the
+      # client RECORDS wild battles under vanilla RNG (drawn values captured — the
+      # harness-validation corpus); on = wild battles draw from server-seeded PCG32
+      # streams (rolls DERIVED from the mint's seed, never trusted). Needs encounters=on
+      # for the seed to ride the mint. INSTRUMENTATION, not enforcement — rejection is
+      # D8's separate flag (PEMK_BATTLE_ENFORCE_RESIM). Default off.
+      rmode = env.fetch("PEMK_BATTLE_ENFORCE_RNG", "off").to_s.strip.downcase
+      @battle_enforce_rng = %w[off shadow on].include?(rmode) ? rmode.to_sym : :off
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {

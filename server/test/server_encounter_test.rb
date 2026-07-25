@@ -46,8 +46,9 @@ class ServerEncounterTest < Minitest::Test
     @db&.disconnect
   end
 
-  def start_server(encounter_mode: "shadow")
+  def start_server(encounter_mode: "shadow", rng: nil)
     env = ENV.to_h.merge("PEMK_WORLD" => FIXTURE.path, "PEMK_BATTLE_ENFORCE_ENCOUNTERS" => encounter_mode)
+    env["PEMK_BATTLE_ENFORCE_RNG"] = rng if rng
     @server = PEMK::Server.new(config: PEMK::Config.new(env: env), logger: ->(m) { @logs << m })
     @server.start
     @port = @server.port
@@ -151,6 +152,56 @@ class ServerEncounterTest < Minitest::Test
     assert(r[:iv].all? { |v| v.is_a?(Integer) && v >= 0 && v <= 31 })
     assert_includes [true, false], r[:shiny]
     c.close
+  end
+
+  # --- D7 part 1: the battle seed rides the mint ----------------------------------------
+
+  def test_grant_carries_a_63_bit_battle_seed_when_rng_is_active
+    start_server(encounter_mode: "on", rng: "on")
+    c, login = authed_conn("d7a@t.co")
+    assert_equal "on", login[:battle_enforce_rng]                # reconcile advertises the mode
+    send_env(c, { type: :pos, map: 5, x: 3, y: 3 })
+    send_env(c, { type: :encounter_req, map: 5, enctype: :Land, seq: 1 })
+    grant = recv(c)
+    assert_equal :encounter_grant, grant[:type]
+    seed = grant[:battle_seed]
+    assert_kind_of Integer, seed
+    assert_operator seed, :>=, 0
+    assert_operator seed, :<, (1 << 63), "seed must fit SIGNED bigint (63-bit)"
+
+    # the roll persist runs on a mailbox WORKER job (the pong only proves the reactor
+    # handler ran) — poll for the row.
+    persisted = wait_for { @db[:encounter_rolls].where(account_id: account_id_of("d7a@t.co")).get(:battle_seed) }
+    assert_equal seed, persisted
+    c.close
+  end
+
+  def wait_for(timeout = 5)
+    deadline = Time.now + timeout
+    loop do
+      v = yield
+      return v if v
+      flunk "condition not met within #{timeout}s" if Time.now > deadline
+      sleep 0.05
+    end
+  end
+
+  def test_grant_has_no_seed_when_rng_is_off
+    start_server(encounter_mode: "on")                           # rng defaults off
+    c, login = authed_conn("d7b@t.co")
+    assert_equal "off", login[:battle_enforce_rng]
+    send_env(c, { type: :pos, map: 5, x: 3, y: 3 })
+    send_env(c, { type: :encounter_req, map: 5, enctype: :Land, seq: 1 })
+    grant = recv(c)
+    assert_equal :encounter_grant, grant[:type]
+    assert_nil grant[:battle_seed]
+    row = wait_for { @db[:encounter_rolls].where(account_id: account_id_of("d7b@t.co")).first }
+    assert_nil row[:battle_seed]   # the ROW exists (not vacuous) and carries no seed
+    c.close
+  end
+
+  def account_id_of(email)
+    @db[:accounts].where(email: email).get(:id)
   end
 
   def test_encounter_req_wrong_map_denies
