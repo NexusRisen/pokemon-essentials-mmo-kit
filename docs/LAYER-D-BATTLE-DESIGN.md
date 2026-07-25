@@ -69,8 +69,20 @@
 > off; needs encounters=on for foe context. Adversarial review caught (and fixed
 > before commit) a persisted-false-accusation bug (a spend after a win labeled
 > suspect in the ledger), an inert-client bug (foes wiped before the report), and a
-> cross-thread window race. Next: D6 (per-mon EXP/level authority) or the engine tier
-> (D7+).
+> cross-thread window race.
+>
+> **Progress (2026-07-22): D5 shipped (statistical anomaly detection — the backstop).**
+> Purely server-side, and it NEVER enforces — it turns the D2-D4 telemetry into a human
+> REVIEW QUEUE (`anomaly_reports`), because a lucky player looks like a cheat. Two
+> signals: per-account SUSPECT counters (`player_flags`, atomically incremented at the
+> reward/catch-spam/encounter detections) and a provenance mix — a `client`-origin mon
+> whose species is in a wild table is a fabricated wild catch, attributed to the
+> immutable MINTER (`issuer_account_id`, so a fabricated mon traded to a victim can't
+> frame them), eggs excluded. A periodic worker-thread sweep (≤ every 60s, non-
+> overlapping) refreshes reports past their thresholds. `PEMK_ANOMALY_DETECTION` binary,
+> default off; migration 010 additive. Adversarial review caught (and fixed) a
+> trade-griefing false-positive (owner- vs issuer-grouping). Tier 1 detection is now
+> complete. Next: D6 (per-mon EXP/level authority) or the engine tier (D7+).
 
 This document answers the last open question in the anti-cheat ladder: **how does
 the server independently decide what a battle produced — the Pokémon that

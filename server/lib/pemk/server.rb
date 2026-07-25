@@ -60,6 +60,10 @@ module PEMK
       @reward_audit = if @config.battle_enforce_rewards != :off
                         RewardAudit.new(RewardCalc.new(@battle), @battle, logger: @log)
                       end
+      # M4 Layer D D5: cross-battle anomaly detection -> review queue (never enforces).
+      @anomaly = AnomalyDetector.new(@db, @world, logger: @log) if @config.anomaly_detection
+      @last_anomaly_sweep = nil
+      @anomaly_sweeping   = false
       @audit      = Audit.new(@world, logger: @log)
       @pos_audit  = PositionAudit.new(@world, logger: @log, mode: @config.position_enforcement)   # M4 Layer B
       @pickups    = Pickups.new(@db)   # M4 Layer C one-shot ledger
@@ -71,7 +75,7 @@ module PEMK
       @reactor  = Reactor.new(
         host: @config.bind, port: @config.port,
         on_frame: method(:on_frame), on_close: method(:on_close),
-        on_tick: method(:sweep_trades), logger: @log
+        on_tick: method(:on_tick), logger: @log
       )
       @mailbox  = PlayerMailbox.new(pool: @pool, post: @reactor.method(:post), logger: @log)
     end
@@ -92,6 +96,7 @@ module PEMK
       @log.call("server: encounter enforcement = #{@config.battle_enforce_encounters} (M4 Layer D D2)")
       @log.call("server: catch enforcement = #{@config.battle_enforce_catches} (M4 Layer D D3)")
       @log.call("server: reward enforcement = #{@config.battle_enforce_rewards} (M4 Layer D D4, detection-only)")
+      @log.call("server: anomaly detection = #{@config.anomaly_detection ? 'on' : 'off'} (M4 Layer D D5, review-queue only)")
       if @config.battle_enforce_rewards != :off && @config.battle_enforce_encounters != :on
         @log.call("server: WARNING reward detection is on but encounter enforcement is #{@config.battle_enforce_encounters} — no foe context, so battle windows can't open")
       end
@@ -294,7 +299,10 @@ module PEMK
         if @reward_audit && field.to_s == "money" && value.is_a?(Integer) && !@ledger.recorded?(account_id, field, seq)
           delta = value - @ledger.current(account_id, field)
           reason, suspect = @reward_audit.note_money(account_id, delta)
-          @log.call("reward: account #{account_id} SUSPECT money delta #{delta} exceeds battle window (#{reason})") if suspect
+          if suspect
+            @log.call("reward: account #{account_id} SUSPECT money delta #{delta} exceeds battle window (#{reason})")
+            flag_anomaly(account_id, :reward_money)
+          end
         end
         status = @ledger.apply_econ(account_id, field, value, seq, reason: reason)
         @reactor.post do
@@ -402,7 +410,10 @@ module PEMK
       return if changes.empty?
 
       suspect, detail = @reward_audit.check_levels(account_id, changes)
-      @log.call("reward: account #{account_id} SUSPECT level jump — #{detail}") if suspect
+      if suspect
+        @log.call("reward: account #{account_id} SUSPECT level jump — #{detail}")
+        flag_anomaly(account_id, :reward_level)
+      end
     end
 
     # Detection-only interaction audit (M4 Layer A). Runs INLINE on the reactor
@@ -527,6 +538,8 @@ module PEMK
       wm = would ? "#{would['species']}@#{would['level']}#{would['shiny'] ? '/shiny' : ''}" : "-"
       @log.call("encounter: account #{account_id} #{tag} map #{map} #{enctype} " \
                 "client=#{species}@#{level} server_would=#{wm}")
+      flag_anomaly(account_id, :encounter_species)   if legal == false
+      flag_anomaly(account_id, :encounter_wrong_map) if legal != false && wrong_map
     end
 
     # M4 Layer D D2 (on): server-authoritative wild-encounter MINT. The client requests an
@@ -556,6 +569,7 @@ module PEMK
 
       if pos[0] != map
         @log.call("encounter: account #{account_id} req wrong-map claim #{map} (on #{pos[0]}) -> deny")
+        flag_anomaly(account_id, :encounter_wrong_map)
         return reply(conn, type: :encounter_deny, seq: seq, reason: "wrong_map")
       end
 
@@ -616,6 +630,7 @@ module PEMK
       mint["attempts"] = (mint["attempts"] || 0) + 1
       if mint["attempts"] == 21
         @log.call("catch: account #{account_id} SUSPECT catch-spam #{species}@#{level} (21+ attempts on one mint)")
+        flag_anomaly(account_id, :catch_spam)
       end
 
       hp_iv   = mint["iv"].is_a?(Array) ? mint["iv"][0] : nil
@@ -728,6 +743,40 @@ module PEMK
     # Reactor-thread periodic: time out a lone (half-committed) rendezvous whose
     # partner never committed and never disconnected. A lone commit never mutated
     # the registry, so this only frees the entry + tells the waiter.
+    # Reactor-thread periodic hook (fires up to ~2x/s). Keep it O(1): the trade sweep is
+    # in-memory; the anomaly sweep is DB-heavy so it's dispatched to a worker, gated to run
+    # at most every ANOMALY_SWEEP_SEC and never overlapping itself.
+    ANOMALY_SWEEP_SEC = 60
+
+    def on_tick
+      sweep_trades
+      maybe_anomaly_sweep
+    end
+
+    def maybe_anomaly_sweep
+      return unless @anomaly
+
+      now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      return if @anomaly_sweeping
+      return if @last_anomaly_sweep && (now - @last_anomaly_sweep) < ANOMALY_SWEEP_SEC
+
+      @last_anomaly_sweep = now
+      @anomaly_sweeping   = true
+      @pool.submit do
+        begin
+          @anomaly.sweep
+        ensure
+          @reactor.post { @anomaly_sweeping = false }   # clear on the reactor thread
+        end
+      end
+    end
+
+    # Fire-and-forget: bump an account's SUSPECT counter off the reactor thread (atomic
+    # upsert). No-op unless anomaly detection is enabled.
+    def flag_anomaly(account_id, kind)
+      @pool.submit { @anomaly.record_flag(account_id, kind) } if @anomaly
+    end
+
     def sweep_trades
       return if @pending_trades.empty?
 

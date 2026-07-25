@@ -101,6 +101,30 @@ module PEMK
     def connections; @connections; end             # raw [m1,x1,y1,m2,x2,y2] arrays
     def encounters(map_id); @encounters[map_id]; end
 
+    # The set of every species (String) that appears in ANY map's wild encounter table,
+    # across all versions/types. Used by D5 to tell a fabricated wild-table mon (a
+    # "client"-origin Pidgey) from a legitimate gift. Computed once, frozen.
+    def wild_species
+      @wild_species ||= begin
+        set = {}
+        @encounters.each_value do |versions|
+          next unless versions.is_a?(Hash)
+
+          versions.each_value do |types|
+            next unless types.is_a?(Hash)
+
+            types.each_value do |t|
+              slots = t.is_a?(Hash) ? t["slots"] : nil
+              next unless slots.is_a?(Array)
+
+              slots.each { |s| set[s[1].to_s] = true if s.is_a?(Array) && s[1] }
+            end
+          end
+        end
+        set.keys.freeze
+      end
+    end
+
     # A tile the player can legally be teleported TO without a warp event: the
     # new-game start, the global home (whiteout fallback), or any map's heal
     # destination (Pokémon Center / Fly-heal return). Layer B transfer whitelist.

@@ -96,4 +96,13 @@ class ConfigTest < Minitest::Test
     assert_equal :on,     PEMK::Config.new(env: ENV.to_h.merge("PEMK_BATTLE_ENFORCE_REWARDS" => "ON")).battle_enforce_rewards
     assert_equal :off,    PEMK::Config.new(env: ENV.to_h.merge("PEMK_BATTLE_ENFORCE_REWARDS" => "junk")).battle_enforce_rewards
   end
+
+  # M4 Layer D D5: anomaly detection, binary on/off, default off.
+  def test_anomaly_detection_defaults_off_and_reads_env
+    env = ENV.to_h
+    env.delete("PEMK_ANOMALY_DETECTION")
+    refute PEMK::Config.new(env: env).anomaly_detection
+    assert_equal true,  PEMK::Config.new(env: ENV.to_h.merge("PEMK_ANOMALY_DETECTION" => "ON")).anomaly_detection
+    assert_equal false, PEMK::Config.new(env: ENV.to_h.merge("PEMK_ANOMALY_DETECTION" => "junk")).anomaly_detection
+  end
 end
