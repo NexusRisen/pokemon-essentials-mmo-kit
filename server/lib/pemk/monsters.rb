@@ -31,11 +31,12 @@ module PEMK
   # wins — not necessarily the original), the other gets "client" — either way the
   # dupe is visible. Runs under the per-account PlayerMailbox.
   class Monsters
-    def initialize(db, caps, logger: nil, rolls: nil)
+    def initialize(db, caps, logger: nil, rolls: nil, resim: :off)
       @db    = db
       @caps  = caps                # { uid_req_max:, party_max:, level_max: }
       @log   = logger || ->(_m) {}
       @rolls = rolls               # EncounterRolls | nil (provenance recording off)
+      @resim = resim               # D8 mode: :off | :shadow | :on (birth states)
     end
 
     # -> [:ack, grants] | [:rej, ["bad_shape"]]   (grants = [{tmp:, uid:}, ...])
@@ -134,11 +135,9 @@ module PEMK
     # its discarded "client" label never mislabels). A save-copied clone of a wild mon
     # (new nonce, same pid) finds the roll already claimed -> labeled "client".
     def mint_one(account_id, m)
-      origin =
-        if @rolls
-          (@rolls.claim(account_id, m[:species], m[:pid]) || :client).to_s
-        end
-      uid = @db[:monsters].insert_conflict.insert(
+      roll   = (@rolls.claim(account_id, m[:species], m[:pid]) if @rolls)
+      origin = (@rolls ? (roll ? roll[:label] : :client).to_s : nil)
+      row = {
         owner_account_id:  account_id,
         issuer_account_id: account_id,
         client_nonce:      m[:tmp],
@@ -147,10 +146,38 @@ module PEMK
         personal_id:       m[:pid],
         egg_at_issue:      m[:egg],
         origin:            origin
-      )
+      }
+      row.merge!(birth_state(account_id, roll))
+      uid = @db[:monsters].insert_conflict.insert(row)
+      @rolls.stamp_claim(roll[:id], uid) if uid && roll   # same mint_batch transaction
       uid ? [uid, origin] : [existing_uid(account_id, m[:tmp]), nil]
     rescue Sequel::UniqueConstraintViolation
       [existing_uid(account_id, m[:tmp]), nil]
+    end
+
+    # D8 birth states (STEP 2). Only `on` changes state; `shadow` logs what it
+    # would do; a SEEDED roll owes a battle record -> the mon is born provisional
+    # (walk-gated trade hold, STEP 5); a walk-CONDEMNED roll's catch is born
+    # quarantined (the taint lives on the roll — no verdict/claim race).
+    def birth_state(account_id, roll)
+      return {} unless roll && roll[:battle_seed]
+
+      case @resim
+      when :on
+        if roll[:condemned_at]
+          @log.call("resim: account #{account_id} mint claims CONDEMNED roll #{roll[:id]} -> born quarantined")
+          { verify_state: "provisional", status: "quarantined",
+            quarantined_at: Time.now, quarantine_reason: "walk_mismatch" }
+        else
+          { verify_state: "provisional" }
+        end
+      when :shadow
+        @log.call("resim: account #{account_id} mint would be born " \
+                  "#{roll[:condemned_at] ? 'QUARANTINED (condemned roll)' : 'provisional'} (shadow)")
+        {}
+      else
+        {}
+      end
     end
 
     def existing_uid(account_id, nonce)

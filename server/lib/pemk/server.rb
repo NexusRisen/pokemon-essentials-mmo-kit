@@ -45,7 +45,8 @@ module PEMK
       # off/shadow would label every honest catch "client" (and invert the signal). With
       # rolls disabled, origin stays NULL = its documented "unknown" meaning.
       @monsters   = Monsters.new(@db, @config.monster_caps, logger: @log,
-                                 rolls: (@config.battle_enforce_encounters == :on ? @encounter_rolls : nil))
+                                 rolls: (@config.battle_enforce_encounters == :on ? @encounter_rolls : nil),
+                                 resim: @config.battle_enforce_resim)   # D8: birth states
       @trades     = Trades.new(@db)
       # M4 Layer A: read-only world model + detection-only interaction audit. Both are
       # in-memory and DB-free; a missing export just makes the audit a no-op.
