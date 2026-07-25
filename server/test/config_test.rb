@@ -146,6 +146,16 @@ class ConfigTest < Minitest::Test
     assert_equal 2, PEMK::Config.new(env: ENV.to_h.merge("PEMK_RESIM_MIN_STRIKES" => "junk")).resim_min_strikes
   end
 
+  # Audit item 4: the switches/variables shadow, off/shadow/on, default off.
+  def test_flag_state_defaults_off_and_reads_env
+    env = ENV.to_h
+    env.delete("PEMK_FLAG_STATE")
+    assert_equal :off,    PEMK::Config.new(env: env).flag_state
+    assert_equal :shadow, PEMK::Config.new(env: ENV.to_h.merge("PEMK_FLAG_STATE" => "shadow")).flag_state
+    assert_equal :on,     PEMK::Config.new(env: ENV.to_h.merge("PEMK_FLAG_STATE" => "ON")).flag_state
+    assert_equal :off,    PEMK::Config.new(env: ENV.to_h.merge("PEMK_FLAG_STATE" => "junk")).flag_state
+  end
+
   # M4 Layer D D5: anomaly detection, binary on/off, default off.
   def test_anomaly_detection_defaults_off_and_reads_env
     env = ENV.to_h
