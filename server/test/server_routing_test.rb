@@ -128,6 +128,41 @@ class ServerRoutingTest < Minitest::Test
     a.close; b.close; c.close
   end
 
+  # The teardown must survive the gate: the inviter's :awaiting_accept watchdog fires
+  # BEFORE any accept opened a session, so a session-gated trade_cancel would strand
+  # the invitee on its own 30s timeout instead of telling it at once.
+  def test_trade_handshake_and_pre_session_cancel_still_reach_a_stranger
+    a, a_id = open_authed("Invi", "passwordA1")
+    b, b_id = open_authed("Card", "passwordB1")
+
+    send_env(a, { type: :trade_invite, to: b_id, name: "Invi" })
+    assert_equal :trade_invite, recv(b)[:env][:type]
+
+    # ...the invitee never accepts, and the inviter's watchdog cancels
+    send_env(a, { type: :trade_cancel, to: b_id })
+    assert_equal :trade_cancel, recv(b)[:env][:type]
+
+    a.close
+    b.close
+  end
+
+  # The full honest trade payload flow works once an accept has opened the session.
+  def test_trade_payload_flows_after_accept
+    a, a_id = open_authed("Tra1", "passwordA1")
+    b, b_id = open_authed("Tra2", "passwordB1")
+
+    send_env(a, { type: :trade_invite, to: b_id }); recv(b)
+    send_env(b, { type: :trade_accept, to: a_id }); recv(a)   # opens the session both ways
+
+    send_env(a, { type: :trade_offer, to: b_id, uid: 1 })
+    assert_equal :trade_offer, recv(b)[:env][:type]
+    send_env(b, { type: :trade_lock, to: a_id }, Marshal.dump([:mon]))
+    assert_equal :trade_lock, recv(a)[:env][:type]
+
+    a.close
+    b.close
+  end
+
   # An oversized relayed body used to overflow the victim's outbuf and disconnect them.
   def test_oversized_relayed_body_is_dropped
     a, a_id = open_authed("Bigg", "passwordA1")

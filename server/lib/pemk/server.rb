@@ -1109,9 +1109,15 @@ module PEMK
       @reactor.send_frame(target, Wire.encode_split(env.merge(from: from_account), body))
     end
 
-    # Frames a stranger may legitimately send (the handshake itself).
+    # Frames a stranger may legitimately send: the handshake itself, plus the
+    # TEARDOWN. trade_cancel is deliberately here — the inviter's :awaiting_accept
+    # watchdog fires BEFORE any accept opened a session, and dropping that cancel
+    # would leave the invitee waiting on its own 30s timeout instead of being told
+    # at once. It is a pure control frame (no body is ever read from it) and the
+    # client already ignores one that doesn't match its own live trade (`mine?`),
+    # so admitting it from a stranger grants nothing.
     HANDSHAKE = %i[challenge challenge_accept challenge_decline
-                   trade_invite trade_accept trade_decline].freeze
+                   trade_invite trade_accept trade_decline trade_cancel].freeze
 
     def relay_allowed?(type, from_account, to_account)
       return true if HANDSHAKE.include?(type)

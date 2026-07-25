@@ -103,9 +103,12 @@ module PEMK
             PEMK.send_message({ :type => :challenge_decline, :from => PEMK.self_id,
                                    :name => own_name, :to => inc[:from] })
           elsif pbConfirmMessage(_INTL("{1} wants to battle! Accept?", inc[:name]))
+            # Open the gate BEFORE announcing the accept: the partner answers with
+            # their team the instant they see it, and gating on "no pump runs between
+            # these two statements" would be correct only by timing, not by design.
+            agree_with(inc[:from])                    # the player consented -> open the gate
             PEMK.send_message({ :type => :challenge_accept, :from => PEMK.self_id,
                                    :name => own_name, :to => inc[:from] })
-            agree_with(inc[:from])                    # the player consented -> open the gate
             PEMK::BattleNet.set_host(false)           # we accepted -> we replay (client)
             PEMK::BattleSetup.send_team(inc[:from])   # battle launches once both teams are in
           else
