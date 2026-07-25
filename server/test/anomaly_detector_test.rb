@@ -180,4 +180,32 @@ class AnomalyDetectorTest < Minitest::Test
     assert_equal 0, @det.sweep
     assert_nil report(@a, "rng_silent")
   end
+
+  # --- D8: claim-evasion (condemned caught roll, uid never minted) --------------------
+
+  def condemned_unclaimed_roll(account, pid, condemned_age: 7_200)
+    t = Time.now - condemned_age
+    @db[:encounter_rolls].insert(account_id: account, species: "PIDGEY", level: 5, pid: pid,
+                                 iv: Sequel.pg_jsonb([0] * 6), shiny: false, map: 5, enctype: "Land",
+                                 battle_seed: 20_000 + pid, caught_at: t, condemned_at: t,
+                                 claimed_monster_uid: nil, created_at: t)
+  end
+
+  def test_claim_evasion_reports_condemned_never_minted_catches
+    3.times { |i| condemned_unclaimed_roll(@a, 400 + i) }
+    assert_equal 1, @det.sweep
+    r = report(@a, "resim_claim_evasion")
+    assert r
+    assert_equal 3, r[:score]
+  end
+
+  def test_claim_evasion_ignores_claimed_or_within_grace
+    condemned_unclaimed_roll(@a, 500)
+    condemned_unclaimed_roll(@a, 501)
+    condemned_unclaimed_roll(@a, 502, condemned_age: 60)          # inside grace -> not counted
+    # one of them DID mint its uid -> not evasion
+    @db[:encounter_rolls].where(account_id: @a, pid: 500).update(claimed_monster_uid: 999)
+    assert_equal 0, @det.sweep                                    # only 1 qualifying < MIN(3)
+    assert_nil report(@a, "resim_claim_evasion")
+  end
 end

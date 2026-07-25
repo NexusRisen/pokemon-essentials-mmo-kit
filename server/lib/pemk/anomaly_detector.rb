@@ -43,6 +43,13 @@ module PEMK
     SILENT_SEEDED_MIN = 5
     SILENT_GRACE_SEC  = 3600
 
+    # D8 — claim-evasion: quarantine is keyed on the roll->mon link (claimed_monster_uid),
+    # so a cheat could withhold the uid mint to keep a walk-CONDEMNED catch off the hook.
+    # A condemned, caught roll that never minted its uid past the grace window is exactly
+    # that dodge (an honest catch always self-heals a uid at flush). Report it.
+    CLAIM_EVASION_MIN   = 3
+    CLAIM_EVASION_GRACE = 3600
+
     def initialize(db, world, logger: nil)
       @db    = db
       @world = world
@@ -63,7 +70,7 @@ module PEMK
     # The periodic aggregation: recompute both signals and refresh the review queue.
     # -> number of reports written/updated. Runs on a worker thread.
     def sweep(now: Time.now)
-      n = sweep_flags(now) + sweep_provenance(now) + sweep_rng_silence(now)
+      n = sweep_flags(now) + sweep_provenance(now) + sweep_rng_silence(now) + sweep_claim_evasion(now)
       @log.call("anomaly: sweep refreshed #{n} report(s)") if n.positive?
       n
     rescue StandardError => e
@@ -140,6 +147,27 @@ module PEMK
 
         upsert_report(r[:account_id], "rng_silent", r[:count],
                       "#{r[:count]} caught seeded encounters with no battle record", now)
+        count += 1
+      end
+      count
+    end
+
+    # D8: walk-CONDEMNED caught rolls that never minted their uid (dodging the
+    # uid-keyed quarantine) past the grace window.
+    def sweep_claim_evasion(now)
+      return 0 unless @db.table_exists?(:encounter_rolls) && @db[:encounter_rolls].columns.include?(:condemned_at)
+
+      evaded = @db[:encounter_rolls]
+               .exclude(condemned_at: nil).exclude(caught_at: nil)
+               .where(claimed_monster_uid: nil)
+               .where { condemned_at < now - CLAIM_EVASION_GRACE }
+
+      count = 0
+      evaded.group_and_count(:account_id).each do |r|
+        next unless r[:count] >= CLAIM_EVASION_MIN
+
+        upsert_report(r[:account_id], "resim_claim_evasion", r[:count],
+                      "#{r[:count]} walk-condemned caught encounters never minted a uid", now)
         count += 1
       end
       count
