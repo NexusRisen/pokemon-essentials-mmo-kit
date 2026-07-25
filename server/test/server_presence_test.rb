@@ -23,6 +23,7 @@ class ServerPresenceTest < Minitest::Test
     @db = Sequel.connect(ENV.fetch("DATABASE_URL"))
     @db[:monster_transfers].delete rescue nil
     @db[:monsters].delete rescue nil   # no cascade from accounts (deliberate)
+    @db[:enforcement_events].delete rescue nil
     @db[:accounts].delete
     @server = PEMK::Server.new(logger: ->(_m) {})
     @server.start

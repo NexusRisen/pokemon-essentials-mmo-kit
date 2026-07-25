@@ -15,6 +15,7 @@ class TradesTest < Minitest::Test
     @db = PEMK::DB.connect(ENV.fetch("DATABASE_URL"))
     @db[:monster_transfers].delete
     @db[:monsters].delete
+    @db[:enforcement_events].delete rescue nil
     @db[:accounts].delete
     @a = @db[:accounts].insert(email: "a@t.co", password_hash: "x", status: "active", created_at: Time.now)
     @b = @db[:accounts].insert(email: "b@t.co", password_hash: "x", status: "active", created_at: Time.now)

@@ -19,6 +19,7 @@ class EncounterRollsTest < Minitest::Test
     @db[:pickups].delete rescue nil
     @db[:monster_transfers].delete rescue nil
     @db[:monsters].delete rescue nil
+    @db[:enforcement_events].delete rescue nil
     @db[:accounts].delete
     @a = @db[:accounts].insert(email: "er-a@x.co", password_hash: "x", status: "active", created_at: Time.now)
     @b = @db[:accounts].insert(email: "er-b@x.co", password_hash: "x", status: "active", created_at: Time.now)

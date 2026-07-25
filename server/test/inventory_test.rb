@@ -16,6 +16,7 @@ class InventoryTest < Minitest::Test
     @db = PEMK::DB.connect(ENV.fetch("DATABASE_URL"))
     @db[:monster_transfers].delete rescue nil
     @db[:monsters].delete rescue nil   # no cascade from accounts (deliberate)
+    @db[:enforcement_events].delete rescue nil
     @db[:accounts].delete   # cascades to inventory_snapshots
     @acct = @db[:accounts].insert(email: "inv@x.co", password_hash: "x", status: "active", created_at: Time.now)
     @logs = []

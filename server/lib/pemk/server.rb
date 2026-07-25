@@ -68,6 +68,11 @@ module PEMK
       # M4 Layer D D6: per-mon EXP high-water + rollback detection (part 1) + the :on
       # up-only restore (part 2). battle_data supplies per-species EXP sanity caps.
       @monster_stats = MonsterStats.new(@db, battle: @battle) if @config.battle_enforce_exp != :off
+      # M4 Layer D D8: the re-sim verdict sweep (live-server writer of monster state).
+      @resim = ResimVerdicts.new(@db, mode: @config.battle_enforce_resim,
+                                 min_strikes: @config.resim_min_strikes, logger: @log) if @config.battle_enforce_resim != :off
+      @last_resim_sweep = nil
+      @resim_sweeping   = false
       # M4 Layer D D7 part 1: the battle-record corpus ingest (shadow + on).
       if @config.battle_enforce_rng != :off
         @battle_records = BattleRecords.new(@db, mode: @config.battle_enforce_rng, logger: @log)
@@ -861,10 +866,42 @@ module PEMK
     # in-memory; the anomaly sweep is DB-heavy so it's dispatched to a worker, gated to run
     # at most every ANOMALY_SWEEP_SEC and never overlapping itself.
     ANOMALY_SWEEP_SEC = 60
+    RESIM_SWEEP_SEC   = 60
 
     def on_tick
       sweep_trades
       maybe_anomaly_sweep
+      maybe_resim_sweep
+    end
+
+    # D8: same non-overlapping worker-dispatch shape as the anomaly sweep. Consumes
+    # harness-stamped verdicts into monster state. Logs a loud WARNING if replayable
+    # records pile up while verdict_at never advances (the harness isn't running).
+    def maybe_resim_sweep
+      return unless @resim
+
+      now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      return if @resim_sweeping
+      return if @last_resim_sweep && (now - @last_resim_sweep) < RESIM_SWEEP_SEC
+
+      @last_resim_sweep = now
+      @resim_sweeping   = true
+      @pool.submit do
+        begin
+          @resim.sweep
+          warn_if_harness_stalled
+        ensure
+          @reactor.post { @resim_sweeping = false }
+        end
+      end
+    end
+
+    def warn_if_harness_stalled
+      stale = @db[:battle_records].where(replay_status: %w[pending walk_ok walk_skipped])
+                                  .where { created_at < Time.now - 86_400 }.count
+      @log.call("resim: WARNING #{stale} replayable record(s) >24h old with no verdict — is bin/pemk_replay.rb running?") if stale.positive?
+    rescue StandardError => e
+      @log.call("resim: harness-liveness check failed #{e.class}: #{e.message}")
     end
 
     def maybe_anomaly_sweep

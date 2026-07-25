@@ -15,6 +15,7 @@ class CharactersPositionTest < Minitest::Test
     @db = PEMK::DB.connect(ENV.fetch("DATABASE_URL"))
     @db[:monster_transfers].delete rescue nil
     @db[:monsters].delete rescue nil
+    @db[:enforcement_events].delete rescue nil
     @db[:accounts].delete   # cascades to characters
     @acct = @db[:accounts].insert(email: "chr@x.co", password_hash: "x", status: "active", created_at: Time.now)
     @chr  = PEMK::Characters.new(@db)

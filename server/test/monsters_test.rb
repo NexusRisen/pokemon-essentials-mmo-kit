@@ -16,6 +16,7 @@ class MonstersTest < Minitest::Test
     @db = PEMK::DB.connect(ENV.fetch("DATABASE_URL"))
     @db[:monster_transfers].delete rescue nil
     @db[:monsters].delete          # no cascade from accounts (deliberate) -> clear first
+    @db[:enforcement_events].delete rescue nil
     @db[:accounts].delete
     @acct  = @db[:accounts].insert(email: "mon@x.co",  password_hash: "x", status: "active", created_at: Time.now)
     @other = @db[:accounts].insert(email: "mon2@x.co", password_hash: "x", status: "active", created_at: Time.now)
