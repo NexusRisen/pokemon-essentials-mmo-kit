@@ -88,7 +88,10 @@ module PEMK
         if status == "walk_mismatch"
           true                                                   # condemned — hold hard (pre-quarantine window)
         elsif status.nil? || status == "pending"
-          !roll || !roll[:caught_at] || (now - roll[:caught_at]) < HOLD_TTL_SEC   # not walk-cleared -> hold within TTL
+          # not walk-cleared -> hold, but FAIL-OPEN: a missing roll or a NULL caught_at
+          # (no record will ever arrive) must RELEASE, never hold forever. Held only
+          # while a real caught_at is still inside the TTL.
+          !!(roll && roll[:caught_at] && (now - roll[:caught_at]) < HOLD_TTL_SEC)
         else
           false                                                  # walk ran, didn't refute -> released
         end

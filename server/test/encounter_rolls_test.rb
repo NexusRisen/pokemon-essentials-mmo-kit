@@ -107,6 +107,8 @@ class EncounterRollsTest < Minitest::Test
     assert_equal "quarantined", row[:status]               # born condemned — no claim/verdict race
     assert_equal "walk_mismatch", row[:quarantine_reason]
     refute_nil row[:quarantined_at]
+    # the quarantine is attributable in the operator audit trail (the sweep never saw it)
+    assert_equal 1, @db[:enforcement_events].where(monster_uid: grants[0][:uid], kind: "quarantine").count
   end
 
   def test_unseeded_or_off_births_stay_none_active

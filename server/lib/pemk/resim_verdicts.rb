@@ -47,48 +47,68 @@ module PEMK
 
     private
 
-    # --- VERIFY: match -> verified (on only) -----------------------------------
+    # A record is still ACTIONABLE if it was never processed (NULL) — and, in `on`,
+    # ALSO if it was only SHADOW-observed (would_*). So flipping shadow->on
+    # re-adjudicates the observation-period records instead of the shadow verdict
+    # permanently burning the on-mode idempotency slot (review-caught). Terminal
+    # `on` actions (quarantined/verified/suppressed_breaker/pardoned) are excluded.
+    def actionable
+      @mode == :on ? Sequel.|({ enforcement_action: nil }, { enforcement_action: %w[would_quarantine would_verify] })
+                   : { enforcement_action: nil }
+    end
+
+    # --- VERIFY: match -> verified ----------------------------------------------
     def verify_pass(counts, now)
-      @db[:battle_records]
-        .where(replay_status: "match", enforcement_action: nil)
-        .exclude(encounter_roll_id: nil).each do |rec|
+      @db[:battle_records].where(replay_status: "match").where(actionable)
+                          .exclude(encounter_roll_id: nil).each do |rec|
         uid = roll_uid(rec[:encounter_roll_id])
-        action = "verified"
-        if uid && @mode == :on
+        if @mode == :on
+          next if uid.nil?   # the catch hasn't minted yet -> leave actionable, retry next sweep
+
           changed = @db[:monsters].where(id: uid, verify_state: "provisional").update(verify_state: "verified")
           if changed.positive?
             audit(rec[:account_id], "verify", uid, rec[:id], "match -> verified", now)
             counts[:verified] += 1
           end
+          stamp(rec[:id], "verified", now)   # terminal: mon exists (promoted, or already handled)
+        else
+          audit(rec[:account_id], "would_verify", uid, rec[:id], "match (shadow)", now)
+          stamp(rec[:id], "would_verify", now)
+          counts[:verified] += 1
         end
-        stamp(rec[:id], action, now)
       end
     end
 
     # --- CONDEMN: walk_mismatch -> quarantine, per account ----------------------
     def condemn_pass(counts, now)
       accounts = @db[:battle_records]
-                 .where(replay_status: "walk_mismatch", enforcement_action: nil)
+                 .where(replay_status: "walk_mismatch").where(actionable)
                  .distinct.select_map(:account_id)
 
       accounts.each do |account_id|
         pending = @db[:battle_records]
-                  .where(account_id: account_id, replay_status: "walk_mismatch", enforcement_action: nil)
+                  .where(account_id: account_id, replay_status: "walk_mismatch").where(actionable)
                   .order(:id).all
         next if pending.empty?
 
         if storm_suppressed?(pending, now)
+          # DO NOT stamp — leave the records actionable so a transient storm doesn't
+          # permanently forgive them; re-adjudicated once the cohort recovers. Audit
+          # once per record so a persistent storm doesn't spam the trail.
           pending.each do |rec|
-            stamp(rec[:id], "suppressed_breaker", now)
-            audit(account_id, "suppression", roll_uid(rec[:encounter_roll_id]), rec[:id], "fp-storm cohort", now)
+            audit_once(account_id, "suppression", rec, "fp-storm cohort (>= #{STORM_ACCOUNTS} accts)", now)
             counts[:suppressed] += 1
           end
           next
         end
 
-        # Strikes = ALL distinct refuted battles for the account (enforced or not).
-        strikes = @db[:battle_records].where(account_id: account_id, replay_status: "walk_mismatch").count
-        next if strikes < @strikes   # under threshold: leave pending, revisit as strikes grow
+        # Strikes = the account's refuted battles, EXCLUDING ones an operator pardoned
+        # (else a pardoned honest player stays armed for instant re-quarantine). Counted
+        # as total - pardoned so NULL enforcement_action rows (the un-actioned strikes)
+        # are NOT dropped by a NULL-unsafe `!= 'pardoned'`.
+        base    = @db[:battle_records].where(account_id: account_id, replay_status: "walk_mismatch")
+        strikes = base.count - base.where(enforcement_action: "pardoned").count
+        next if strikes < @strikes   # under threshold: leave actionable, revisit as strikes grow
 
         pending.each { |rec| condemn(account_id, rec, counts, now) }
       end
@@ -98,15 +118,17 @@ module PEMK
       roll_id = rec[:encounter_roll_id]
       uid     = roll_uid(roll_id)
       if @mode == :on
-        @db[:encounter_rolls].where(id: roll_id).update(condemned_at: now) if roll_id   # poison unclaimed catch
-        if uid
+        # poison + quarantine + audit + stamp in ONE transaction: a crash mid-condemn
+        # rolls the record back to actionable, so re-run is exactly-once.
+        @db.transaction do
+          @db[:encounter_rolls].where(id: roll_id).update(condemned_at: now) if roll_id   # poison unclaimed catch
           @db[:monsters].where(id: uid, status: "active").update(
             status: "quarantined", quarantined_at: now,
             quarantine_reason: "walk_mismatch", quarantine_record_id: rec[:id]
-          )
+          ) if uid
+          audit(account_id, "quarantine", uid, rec[:id], "walk_mismatch, strikes>=#{@strikes}", now)
+          stamp(rec[:id], "quarantined", now)
         end
-        audit(account_id, "quarantine", uid, rec[:id], "walk_mismatch, strikes>=#{@strikes}", now)
-        stamp(rec[:id], "quarantined", now)
         counts[:quarantined] += 1
       else
         audit(account_id, "would_quarantine", uid, rec[:id], "walk_mismatch, strikes>=#{@strikes} (shadow)", now)
@@ -142,6 +164,13 @@ module PEMK
         account_id: account_id, kind: kind, monster_uid: uid,
         record_id: record_id, detail: detail, created_at: now
       )
+    end
+
+    # Audit at most once per (record, kind) — for the re-adjudicated suppression path.
+    def audit_once(account_id, kind, rec, detail, now)
+      return if @db[:enforcement_events].where(record_id: rec[:id], kind: kind).count.positive?
+
+      audit(account_id, kind, roll_uid(rec[:encounter_roll_id]), rec[:id], detail, now)
     end
   end
 end

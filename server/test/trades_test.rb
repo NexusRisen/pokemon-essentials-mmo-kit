@@ -131,6 +131,20 @@ class TradesTest < Minitest::Test
     assert_equal :ok, st, "fail-open: a dead harness must never brick trading forever"
   end
 
+  def test_provisional_with_null_caught_at_fails_open
+    # a provisional mon whose roll has no caught_at (no record will arrive) must
+    # RELEASE, not hold forever (the TTL clock has nothing to tick against).
+    trades = PEMK::Trades.new(@db, resim: :on)
+    uid = mint(@a, "PIDGEY", 1)
+    @db[:monsters].where(id: uid).update(verify_state: "provisional")
+    @db[:encounter_rolls].insert(account_id: @a, species: "PIDGEY", level: 5, pid: 1,
+                                 iv: Sequel.pg_jsonb([0] * 6), shiny: false, map: 5, enctype: "Land",
+                                 battle_seed: 5, caught_at: nil, claimed_monster_uid: uid, created_at: Time.now)
+    ub = mint(@b, "EEVEE", 2)
+    st, = trades.execute_trade("thnull", a: @a, b: @b, a_gives: [uid], b_gives: [ub])
+    assert_equal :ok, st
+  end
+
   def test_provisional_hold_is_off_when_resim_off
     ua = provisional_catch(@a, 1, walk_status: "pending", caught_age: 60)
     ub = mint(@b, "EEVEE", 2)

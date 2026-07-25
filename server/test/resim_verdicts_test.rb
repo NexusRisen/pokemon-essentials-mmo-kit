@@ -111,6 +111,13 @@ class ResimVerdictsTest < Minitest::Test
     assert_equal 0, counts[:quarantined]
     assert_equal 0, @db[:monsters].where(status: "quarantined").count
     assert_operator @db[:enforcement_events].where(kind: "suppression").count, :>, 0
+    # suppressed records stay ACTIONABLE (not stamped) so a transient storm doesn't
+    # permanently forgive them — re-adjudicated once the cohort recovers.
+    assert_equal 0, @db[:battle_records].exclude(enforcement_action: nil).count
+    # ...and a persistent storm doesn't spam the audit trail (once per record)
+    before = @db[:enforcement_events].where(kind: "suppression").count
+    det(strikes: 2).sweep
+    assert_equal before, @db[:enforcement_events].where(kind: "suppression").count
   end
 
   # --- shadow audits, changes no state -----------------------------------------
@@ -128,6 +135,42 @@ class ResimVerdictsTest < Minitest::Test
     uid, = caught(@a, status: "match")
     det(mode: :shadow).sweep
     assert_equal "provisional", mon(uid)[:verify_state]     # verify is a state change -> on only
+  end
+
+  # --- review fixes ------------------------------------------------------------
+
+  # A pardoned refutation stops counting toward strikes (no re-quarantine treadmill).
+  def test_pardoned_record_does_not_count_as_a_strike
+    caught(@a, status: "walk_mismatch")                     # 1 real strike, still pending
+    _, rp, = caught(@a, status: "walk_mismatch")
+    @db[:battle_records].where(id: rp).update(enforcement_action: "pardoned")   # operator cleared this one
+    c = det(strikes: 2).sweep
+    assert_equal 0, c[:quarantined]                         # strikes = 1 (pardoned excluded) < 2
+  end
+
+  # A shadow-observed record is re-adjudicated when the operator flips to on.
+  def test_would_quarantine_is_readjudicated_on_flip_to_on
+    u1, r1, = caught(@a, status: "walk_mismatch")
+    caught(@a, status: "walk_mismatch")
+    det(mode: :shadow, strikes: 2).sweep
+    assert_equal "would_quarantine", rec_action(r1)
+    assert_equal "active", mon(u1)[:status]                 # shadow: no state change
+
+    det(mode: :on, strikes: 2).sweep                        # flip to on
+    assert_equal "quarantined", mon(u1)[:status]            # re-adjudicated, not permanently skipped
+    assert_equal "quarantined", rec_action(r1)
+  end
+
+  # verify never consumes a match record before its catch has minted (uid nil).
+  def test_verify_skips_a_not_yet_minted_catch
+    uid, rec, roll = caught(@a, status: "match")
+    @db[:encounter_rolls].where(id: roll).update(claimed_monster_uid: nil)   # not minted yet
+    det.sweep
+    assert_nil rec_action(rec)                              # left actionable, retried next sweep
+    # once it mints, a later sweep verifies it
+    @db[:encounter_rolls].where(id: roll).update(claimed_monster_uid: uid)
+    det.sweep
+    assert_equal "verified", mon(uid)[:verify_state]
   end
 
   # --- idempotency: a second sweep does nothing new ----------------------------

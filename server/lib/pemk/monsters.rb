@@ -149,7 +149,10 @@ module PEMK
       }
       row.merge!(birth_state(account_id, roll))
       uid = @db[:monsters].insert_conflict.insert(row)
-      @rolls.stamp_claim(roll[:id], uid) if uid && roll   # same mint_batch transaction
+      if uid && roll
+        @rolls.stamp_claim(roll[:id], uid)   # same mint_batch transaction
+        born_quarantine_audit(account_id, uid, roll) if row[:status] == "quarantined"
+      end
       uid ? [uid, origin] : [existing_uid(account_id, m[:tmp]), nil]
     rescue Sequel::UniqueConstraintViolation
       [existing_uid(account_id, m[:tmp]), nil]
@@ -182,6 +185,18 @@ module PEMK
 
     def existing_uid(account_id, nonce)
       @db[:monsters].where(issuer_account_id: account_id, client_nonce: nonce).get(:id)
+    end
+
+    # A mon born quarantined (claimed a walk-condemned roll) gets its own audit row,
+    # so the operator console's `show` trail attributes the quarantine (the verdict
+    # sweep never touched it — it was condemned before it minted).
+    def born_quarantine_audit(account_id, uid, roll)
+      rec_id = @db[:battle_records].where(encounter_roll_id: roll[:id]).order(Sequel.desc(:id)).get(:id)
+      @db[:enforcement_events].insert(account_id: account_id, kind: "quarantine", monster_uid: uid,
+                                      record_id: rec_id, detail: "born quarantined from condemned roll",
+                                      created_at: Time.now)
+    rescue StandardError => e
+      @log.call("resim: born-quarantine audit failed #{e.class}: #{e.message}")
     end
 
     def well_formed_party?(mons)

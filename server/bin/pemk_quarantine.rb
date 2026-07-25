@@ -59,14 +59,22 @@ when "pardon"
     abort "uid #{uid} is not quarantined (status=#{m[:status]})"
   end
   db.transaction do
-    db[:monsters].where(id: uid).update(status: "active", quarantine_reason: nil,
-                                        quarantined_at: nil, quarantine_record_id: nil,
-                                        updated_at: Time.now)
-    # also un-poison the roll so a re-mint / re-verify won't re-quarantine it
-    db[:encounter_rolls].where(claimed_monster_uid: uid).update(condemned_at: nil)
+    # verify_state -> verified: the operator vouches for it, so it leaves the
+    # provisional trade-hold set (a bare status flip would leave it un-tradeable).
+    db[:monsters].where(id: uid).update(status: "active", verify_state: "verified",
+                                        quarantine_reason: nil, quarantined_at: nil,
+                                        quarantine_record_id: nil, updated_at: Time.now)
+    # un-poison the roll so a re-mint / re-verify won't re-quarantine it, and mark its
+    # evidence record 'pardoned' so it stops counting toward the account's strikes
+    # (otherwise the next honest walk-fail re-quarantines instantly — pardon treadmill).
+    roll = db[:encounter_rolls].where(claimed_monster_uid: uid)
+    roll_ids = roll.select_map(:id)
+    roll.update(condemned_at: nil)
+    db[:battle_records].where(encounter_roll_id: roll_ids, replay_status: "walk_mismatch")
+                       .update(enforcement_action: "pardoned", enforced_at: Time.now) unless roll_ids.empty?
     audit(db, m[:owner_account_id], "pardon", uid, reason)
   end
-  puts "pardoned uid #{uid} (#{m[:species]}, acct #{m[:owner_account_id]}) — now active. reason: #{reason}"
+  puts "pardoned uid #{uid} (#{m[:species]}, acct #{m[:owner_account_id]}) — now active + verified. reason: #{reason}"
 
 when "reports"
   rows = db[:anomaly_reports].where(reviewed_at: nil).order(Sequel.desc(:updated_at)).limit(100).all
