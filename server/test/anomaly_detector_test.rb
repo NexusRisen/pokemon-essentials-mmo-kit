@@ -19,6 +19,7 @@ class AnomalyDetectorTest < Minitest::Test
     @db = PEMK::DB.connect(ENV.fetch("DATABASE_URL"))
     @db[:anomaly_reports].delete rescue nil
     @db[:player_flags].delete rescue nil
+    @db[:battle_records].delete rescue nil
     @db[:encounter_rolls].delete rescue nil
     @db[:monster_transfers].delete rescue nil
     @db[:monsters].delete rescue nil
@@ -140,5 +141,42 @@ class AnomalyDetectorTest < Minitest::Test
   def test_empty_sweep_writes_nothing
     assert_equal 0, @det.sweep
     assert_equal 0, @db[:anomaly_reports].count
+  end
+
+  # --- D7 part 3: evasion-by-silence (caught seeded encounters, no battle record) -----
+
+  def seeded_caught_roll(account, pid, age_sec: 7_200)
+    t = Time.now - age_sec
+    @db[:encounter_rolls].insert(account_id: account, species: "PIDGEY", level: 5, pid: pid,
+                                 iv: Sequel.pg_jsonb([0] * 6), shiny: false, map: 5, enctype: "Land",
+                                 battle_seed: 10_000 + pid, caught_at: t, created_at: t)
+  end
+
+  def capability_record(account)
+    @db[:battle_records].insert(account_id: account, mode: "on", record: Sequel.blob("x"),
+                                replay_status: "match", created_at: Time.now)
+  end
+
+  def test_rng_silence_reports_record_capable_silent_accounts
+    capability_record(@a)                                  # the client CAN send records...
+    5.times { |i| seeded_caught_roll(@a, 100 + i) }        # ...yet 5 caught mints have none
+    assert_equal 1, @det.sweep
+    r = report(@a, "rng_silent")
+    assert r, "silent account should be reported"
+    assert_equal 5, r[:score]
+  end
+
+  def test_rng_silence_ignores_accounts_that_never_sent_a_record
+    6.times { |i| seeded_caught_roll(@b, 200 + i) }        # an old client without the plugin
+    assert_equal 0, @det.sweep
+    assert_nil report(@b, "rng_silent")
+  end
+
+  def test_rng_silence_respects_grace_and_threshold
+    capability_record(@a)
+    4.times { |i| seeded_caught_roll(@a, 300 + i) }        # under SILENT_SEEDED_MIN
+    seeded_caught_roll(@a, 399, age_sec: 60)               # 5th is inside the grace window
+    assert_equal 0, @det.sweep
+    assert_nil report(@a, "rng_silent")
   end
 end

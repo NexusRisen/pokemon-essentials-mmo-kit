@@ -252,6 +252,27 @@ class ServerBattleRecordTest < Minitest::Test
     c.close
   end
 
+  # --- D7 part 3: corpus retention ----------------------------------------------
+
+  def test_prune_drops_only_old_matched_records
+    a = @db[:accounts].insert(email: "prune@t.co", password_hash: "x", status: "active", created_at: Time.now)
+    br  = PEMK::BattleRecords.new(@db)
+    old = Time.now - (40 * 86_400)
+    ins = lambda do |status, t|
+      @db[:battle_records].insert(account_id: a, mode: "on", record: Sequel.blob("x"),
+                                  replay_status: status, created_at: t)
+    end
+    ins.call("match", old)                       # spent evidence -> pruned
+    ins.call("mismatch", old)                    # EVIDENCE -> kept forever
+    ins.call("walk_mismatch", old)               # EVIDENCE -> kept forever
+    ins.call("match", Time.now)                  # fresh match -> kept
+
+    assert_equal 1, br.prune
+    assert_equal %w[match mismatch walk_mismatch],
+                 @db[:battle_records].select_map(:replay_status).sort
+    assert_equal 0, br.prune(days: 0)            # 0 = retention disabled, no-op
+  end
+
   def test_oversized_or_malformed_records_are_rejected
     start_server(rng: "shadow")
     c, = authed_conn("br6@t.co")

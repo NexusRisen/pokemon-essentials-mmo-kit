@@ -19,11 +19,28 @@ module PEMK
     DRAWS_MAX  = 1_000_000    # sanity for the promoted counters
     HOURLY_CAP = 120          # records per account per hour (spam/storage bound —
                               # nobody finishes more wild battles than this honestly)
+    # D7 part 3 — corpus retention: MATCHED records are spent (they proved parity)
+    # and prune after this many days; every other status is EVIDENCE (mismatch /
+    # walk_mismatch / no_log / mode_mismatch / error) or still-pending work and is
+    # KEPT. Operators override via PEMK_CORPUS_RETENTION_DAYS (0 = keep forever).
+    RETENTION_DAYS = 30
 
     def initialize(db, mode: :off, logger: nil)
       @db   = db
       @mode = mode   # the SERVER's configured rng mode (masquerade detection)
       @log  = logger || ->(_m) {}
+    end
+
+    # Boot-time retention: drop MATCHED records older than +days+ (0 disables).
+    # Non-match statuses are never pruned here — they are the operator's evidence.
+    # -> rows deleted.
+    def prune(days: RETENTION_DAYS, now: Time.now)
+      return 0 unless days.positive?
+
+      @db[:battle_records]
+        .where(replay_status: "match")
+        .where { created_at < now - (days * 86_400) }
+        .delete
     end
 
     # -> :ok | :desync | :dup | :bad — telemetry only; the client gets no reply either

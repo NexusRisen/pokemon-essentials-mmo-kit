@@ -117,6 +117,16 @@ class ConfigTest < Minitest::Test
     assert_equal :off,    PEMK::Config.new(env: ENV.to_h.merge("PEMK_BATTLE_ENFORCE_RNG" => "junk")).battle_enforce_rng
   end
 
+  # M4 Layer D D7 part 3: corpus retention days — matched records only; 0 = keep forever.
+  def test_corpus_retention_days_defaults_and_reads_env
+    env = ENV.to_h
+    env.delete("PEMK_CORPUS_RETENTION_DAYS")
+    assert_equal 30, PEMK::Config.new(env: env).corpus_retention_days
+    assert_equal 7,  PEMK::Config.new(env: ENV.to_h.merge("PEMK_CORPUS_RETENTION_DAYS" => "7")).corpus_retention_days
+    assert_equal 0,  PEMK::Config.new(env: ENV.to_h.merge("PEMK_CORPUS_RETENTION_DAYS" => "0")).corpus_retention_days
+    assert_equal 30, PEMK::Config.new(env: ENV.to_h.merge("PEMK_CORPUS_RETENTION_DAYS" => "junk")).corpus_retention_days
+  end
+
   # M4 Layer D D5: anomaly detection, binary on/off, default off.
   def test_anomaly_detection_defaults_off_and_reads_env
     env = ENV.to_h

@@ -10,7 +10,8 @@ module PEMK
                 :monster_caps, :world_path, :position_enforcement, :pickup_enforce,
                 :pickup_reset_allowed, :battle_data_path, :battle_enforce_teams,
                 :battle_enforce_encounters, :battle_enforce_catches, :battle_enforce_rewards,
-                :battle_enforce_exp, :battle_enforce_rng, :anomaly_detection
+                :battle_enforce_exp, :battle_enforce_rng, :corpus_retention_days,
+                :anomaly_detection
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -104,6 +105,12 @@ module PEMK
       # D8's separate flag (PEMK_BATTLE_ENFORCE_RESIM). Default off.
       rmode = env.fetch("PEMK_BATTLE_ENFORCE_RNG", "off").to_s.strip.downcase
       @battle_enforce_rng = %w[off shadow on].include?(rmode) ? rmode.to_sym : :off
+
+      # D7 part 3: battle-record corpus retention (days; matched records only —
+      # evidence statuses are never auto-pruned). 0 = keep forever. Junk -> default
+      # (30, mirrored in BattleRecords::RETENTION_DAYS — config loads first).
+      raw = env.fetch("PEMK_CORPUS_RETENTION_DAYS", "").to_s.strip
+      @corpus_retention_days = raw.match?(/\A\d+\z/) ? raw.to_i : 30
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {
