@@ -169,6 +169,11 @@ module PEMK
     private
 
     def on_frame(conn, payload)
+      # An EVICTED socket (a relogin took over this account) must never mutate account
+      # state again — it used to be honored for one more frame (audit).
+      return if conn.closing
+
+      conn.data[:last_seen] = Process.clock_gettime(Process::CLOCK_MONOTONIC)   # idle sweep
       dec = Wire.decode_envelope(payload, false) # host path rejects legacy whole-Marshal
       unless dec
         @log.call("server: bad/legacy frame from #{conn.addr} -> drop")
