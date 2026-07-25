@@ -33,5 +33,19 @@ for f in lib/pemk.rb lib/pemk/*.rb bin/*.rb ../protocol/*.rb test/*.rb test/supp
   ruby -c "$f" >/dev/null && echo "ok  $f"
 done
 
+# The 6.6k lines of client plugin adopt every enforcement decision and write into live
+# player saves, yet had NO automated check at all (audit). ruby -c is the cheap floor —
+# it catches the syntax break that would otherwise only surface when Sam launches the game.
+echo "== client plugin syntax check =="
+plugin_fail=0
+for f in ../Plugins/PEMK/*/*.rb; do
+  ruby -c "$f" >/dev/null || { echo "FAIL $f"; plugin_fail=$((plugin_fail + 1)); }
+done
+if [ "$plugin_fail" -gt 0 ]; then
+  echo "$plugin_fail plugin file(s) failed to parse"
+  exit 1
+fi
+echo "ok  $(ls ../Plugins/PEMK/*/*.rb | wc -l) plugin files"
+
 echo "== rake test =="
 bundle exec rake test
