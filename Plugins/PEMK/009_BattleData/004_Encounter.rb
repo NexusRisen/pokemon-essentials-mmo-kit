@@ -151,6 +151,9 @@ module PEMK
       # Lock getForm-style forms (season/trim) as pbGenerateWildPokemon does; getFormOnCreation
       # forms (Unown/Burmy/…) are already set by Pokemon.new (recheck_form defaults true).
       (pkmn.form_simple = pkmn.form if MultipleForms.hasFunction?(pkmn.species, "getForm")) rescue nil
+      # D7: the battle seed born with this mint — stash for BattleRng's arm-at-battle-start
+      # (single-use, bound to this pid; absent when the server's rng seam is off).
+      (PEMK::BattleRng.note_grant(g[:battle_seed], g[:pid]) rescue nil)
       pkmn
     rescue StandardError => e
       PEMK.log("encounter: build error #{e.class}: #{e.message}")

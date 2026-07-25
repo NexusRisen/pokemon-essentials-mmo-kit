@@ -3,6 +3,7 @@
 # PEMK dedicated server — top-level require. Assumes the load path includes both
 # server/lib and the vendored protocol/ dir (see bin/pemk_server.rb).
 require "pemk_wire"        # PEMK::Wire (from protocol/)
+require "pemk_prng"        # PEMK::Prng (from protocol/) — D7 cross-engine battle PRNG
 require "pemk/config"
 require "pemk/db"
 require "pemk/password"
@@ -22,6 +23,7 @@ require "pemk/catch_calc"
 require "pemk/reward_calc"
 require "pemk/reward_audit"
 require "pemk/monster_stats"
+require "pemk/battle_records"
 require "pemk/anomaly_detector"
 require "pemk/audit"
 require "pemk/position_audit"

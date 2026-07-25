@@ -67,6 +67,10 @@ module PEMK
       # M4 Layer D D6: per-mon EXP high-water + rollback detection (part 1) + the :on
       # up-only restore (part 2). battle_data supplies per-species EXP sanity caps.
       @monster_stats = MonsterStats.new(@db, battle: @battle) if @config.battle_enforce_exp != :off
+      # M4 Layer D D7 part 1: the battle-record corpus ingest (shadow + on).
+      if @config.battle_enforce_rng != :off
+        @battle_records = BattleRecords.new(@db, mode: @config.battle_enforce_rng, logger: @log)
+      end
       @audit      = Audit.new(@world, logger: @log)
       @pos_audit  = PositionAudit.new(@world, logger: @log, mode: @config.position_enforcement)   # M4 Layer B
       @pickups    = Pickups.new(@db)   # M4 Layer C one-shot ledger
@@ -180,6 +184,7 @@ module PEMK
       when :catch_req then handle_catch_req(conn, env, authed)
       when :catch_report then handle_catch_report(conn, env, authed)
       when :battle_end_report then handle_battle_end(conn, env, authed)
+      when :battle_record then handle_battle_record(env, dec[:body], authed)
       when :trade_commit then handle_trade_commit(conn, env, authed)
       when :pos, :dir, :step, :spawn then handle_presence(conn, env, authed)
       when *ADDRESSED then handle_addressed(conn, env, dec[:body], authed)
@@ -676,6 +681,24 @@ module PEMK
                 pid: mint["pid"], iv: mint["iv"], shiny: mint["shiny"] }
       grant[:battle_seed] = seed if seed
       reply(conn, **grant)
+    end
+
+    # M4 Layer D D7 part 1: a finished wild battle's capture record (fire-and-forget,
+    # no reply — instrumentation, never adjudicates). The opaque body is stored
+    # verbatim for part 2's headless replay; ingest runs on the account mailbox so the
+    # seed's roll row (recorded there) is guaranteed visible.
+    def handle_battle_record(env, body, account_id)
+      return unless @battle_records
+
+      @mailbox.submit(account_id) do
+        begin
+          result = @battle_records.ingest(account_id, env, body)
+          # the seed walk refuted the claimed draws -> D5 review-queue counter
+          flag_anomaly(account_id, :rng_desync) if result == :desync
+        rescue StandardError => e
+          @log.call("battlerec: ingest job failed #{e.class}: #{e.message}")
+        end
+      end
     end
 
     # M4 Layer D D3 (on): server-adjudicated Poké Ball capture. The client asks for a

@@ -48,6 +48,7 @@ module PEMK
       (PEMK::Catch.reset rescue nil)      # ... and the advertised catch mode (M4-D3)
       (PEMK::Reward.reset rescue nil)     # ... and the advertised reward mode (M4-D4)
       (PEMK::ExpCorrect.reset rescue nil) # ... and any pending EXP restore + mode (M4-D6)
+      (PEMK::BattleRng.reset rescue nil)  # ... and any pending battle seed + mode (M4-D7)
       @seq = Hash.new(0)
       @dirty_since = nil
       @last_change = nil

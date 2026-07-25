@@ -30,13 +30,18 @@ module PEMK
 
     # Boot-time retention: drop stale rolls that were never caught and never claimed
     # (fled/abandoned encounters — the overwhelming majority). Caught or claimed rows
-    # are audit and are kept. -> rows deleted.
+    # are audit and are kept — and so is any roll a D7 battle record references
+    # (pruning it would SET NULL the record's binding and re-open the seed's
+    # single-use constraint). -> rows deleted.
     def prune(now: Time.now, days: RETENTION_DAYS)
       cutoff = now - (days * 86_400)
-      @db[:encounter_rolls]
-        .where(caught_at: nil, claimed_at: nil)
-        .where { created_at < cutoff }
-        .delete
+      ds = @db[:encounter_rolls]
+           .where(caught_at: nil, claimed_at: nil)
+           .where { created_at < cutoff }
+      if @db.table_exists?(:battle_records)
+        ds = ds.exclude(id: @db[:battle_records].exclude(encounter_roll_id: nil).select(:encounter_roll_id))
+      end
+      ds.delete
     end
 
     # Persist a D2 mint (String-keyed hash from EncounterMint#roll). -> row id.
