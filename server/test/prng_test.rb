@@ -70,12 +70,13 @@ class PrngTest < Minitest::Test
     assert_equal a.next_u32, b.next_u32
   end
 
-  # The plugin copy is a VERBATIM vendor of the canonical protocol file — byte
-  # equality, so client and server can never drift apart silently.
-  def test_plugin_copy_is_byte_identical
-    canonical = File.read(File.expand_path("../../protocol/pemk_prng.rb", __dir__))
-    vendored  = File.read(File.expand_path("../../Plugins/PEMK/001_Net/003_Prng.rb", __dir__))
+  # The plugin copy is a VERBATIM vendor of the canonical protocol file — equal
+  # modulo line endings (git's CRLF normalization on Windows makes raw byte
+  # equality unstable across checkouts; the CODE is the contract).
+  def test_plugin_copy_is_identical
+    canonical = File.read(File.expand_path("../../protocol/pemk_prng.rb", __dir__)).gsub("\r\n", "\n")
+    vendored  = File.read(File.expand_path("../../Plugins/PEMK/001_Net/003_Prng.rb", __dir__)).gsub("\r\n", "\n")
     assert_equal canonical, vendored,
-                 "protocol/pemk_prng.rb and Plugins/PEMK/001_Net/003_Prng.rb must be byte-identical (edit protocol/, copy to Plugins/)"
+                 "protocol/pemk_prng.rb and Plugins/PEMK/001_Net/003_Prng.rb must be identical (edit protocol/, copy to Plugins/)"
   end
 end

@@ -29,7 +29,7 @@ echo "== migrate pemk_test =="
 bundle exec rake db:migrate
 
 echo "== syntax check =="
-for f in lib/pemk.rb lib/pemk/*.rb bin/*.rb ../protocol/*.rb test/*.rb; do
+for f in lib/pemk.rb lib/pemk/*.rb bin/*.rb ../protocol/*.rb test/*.rb test/support/*.rb harness/*.rb; do
   ruby -c "$f" >/dev/null && echo "ok  $f"
 done
 
