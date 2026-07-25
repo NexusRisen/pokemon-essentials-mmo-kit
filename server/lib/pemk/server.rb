@@ -85,6 +85,8 @@ module PEMK
       @zones    = Hash.new { |h, k| h[k] = Set.new }   # map_id => Set(conn); reactor-thread only
       @online   = {}                                    # account_id => conn; reactor-thread only
       @pending_trades = {}                              # trade_id => rendezvous; reactor-thread only
+      @peer_sessions  = {}                              # account_id => partner id (mutual); reactor-thread only
+      @conn_buckets   = {}                              # conn => [tokens, last_refill]; reactor-thread only
       @reactor  = Reactor.new(
         host: @config.bind, port: @config.port,
         on_frame: method(:on_frame), on_close: method(:on_close),
@@ -184,12 +186,54 @@ module PEMK
         return
       end
 
+      # Per-connection budget for AUTHENTICATED frames. Nothing rate-limited anything
+      # after login before this (audit): one socket could spam DB-touching frames until
+      # the mailbox/pool queues ate the host. Honest clients send these at human,
+      # debounced cadence, so the budgets are generous.
+      if authed && !frame_budget_ok?(conn, type)
+        @log.call("server: account #{authed} over budget on #{type.inspect} -> drop")
+        return
+      end
+
+      dispatch_frame(conn, env, type, authed, dec[:body])
+    rescue StandardError => e
+      # A raise used to unwind to the reactor's blanket rescue, aborting the whole tick
+      # (and the rest of this socket's already-parsed frames) with an unattributable log.
+      @log.call("server: handler error on #{type.inspect} account #{authed.inspect}: #{e.class}: #{e.message}")
+    end
+
+    # Token bucket per connection. Tight for the DB-touching types, generous for
+    # presence. Unlisted authed types get the default bucket.
+    FRAME_BUDGETS = {
+      # save: the Checkpoint fires urgent (<=1s) bursts after high-value events, so the
+      # burst must absorb several back-to-back pushes; sustained 1/s is still ~100x an
+      # honest client and bounds a flood to the blob cap per second.
+      save: [10, 1.0], econ: [10, 4], inv: [10, 4], uid_req: [10, 4], mon_party: [10, 4],
+      encounter_req: [10, 2], catch_req: [20, 6], battle_record: [6, 1], trade_commit: [6, 2],
+      team_check: [10, 2], pickup_req: [20, 6], interact_claim: [30, 10],
+      pos: [40, 20], dir: [40, 20], step: [40, 20], spawn: [10, 2]
+    }.freeze
+    FRAME_BUDGET_DEFAULT = [30, 10].freeze
+
+    def frame_budget_ok?(conn, type)
+      burst, rate = FRAME_BUDGETS.fetch(type, FRAME_BUDGET_DEFAULT)
+      now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      b = (conn.data[:budgets] ||= {})
+      tokens, last = b[type] || [burst.to_f, now]
+      tokens = [tokens + ((now - last) * rate), burst.to_f].min
+      return (b[type] = [tokens, now]) && false if tokens < 1.0
+
+      b[type] = [tokens - 1.0, now]
+      true
+    end
+
+    def dispatch_frame(conn, env, type, authed, body)
       case type
       when :ping     then reply(conn, type: :pong, t: env[:t])
       when :register then handle_register(conn, env)
       when :login    then handle_login(conn, env)
       when :auth     then handle_auth(conn, env)
-      when :save     then handle_save(env, dec[:body], authed, conn.data[:last_pos])
+      when :save     then handle_save(conn, env, body, authed, conn.data[:last_pos])
       when :econ     then handle_econ(conn, env, authed)
       when :inv      then handle_inv(conn, env, authed)
       when :uid_req  then handle_uid_req(conn, env, authed)
@@ -203,10 +247,10 @@ module PEMK
       when :catch_req then handle_catch_req(conn, env, authed)
       when :catch_report then handle_catch_report(conn, env, authed)
       when :battle_end_report then handle_battle_end(conn, env, authed)
-      when :battle_record then handle_battle_record(env, dec[:body], authed)
+      when :battle_record then handle_battle_record(env, body, authed)
       when :trade_commit then handle_trade_commit(conn, env, authed)
       when :pos, :dir, :step, :spawn then handle_presence(conn, env, authed)
-      when *ADDRESSED then handle_addressed(conn, env, dec[:body], authed)
+      when *ADDRESSED then handle_addressed(conn, env, body, authed)
       else
         # Other authenticated gameplay frames (economy, battle) — per-player mailbox
         # routing + handlers land in later milestones.
@@ -297,10 +341,22 @@ module PEMK
     # must commit in arrival order (raw-pool scheduling could commit the OLDER
     # blob last, silently rolling the account back), and the login/auth state
     # read serializes behind any in-flight save.
-    def handle_save(env, body, account_id, last_pos)
+    # A real Essentials save measures ~100 KB; full PC boxes leave plenty of room under
+    # this. MUST stay below the reactor's OUTBUF_CAP (4 MiB) or a stored blob could
+    # never be delivered back at login, permanently bricking that account (audit).
+    SAVE_MAX_BYTES = 2 * 1024 * 1024
+
+    def handle_save(conn, env, body, account_id, last_pos)
       unless body.is_a?(String) && !body.empty?
         @log.call("server: empty :save from account #{account_id} -> ignore")
         return
+      end
+
+      if body.bytesize > SAVE_MAX_BYTES
+        # Tell the client rather than dropping silently: a save that never lands is
+        # invisible permanent progress loss.
+        @log.call("server: account #{account_id} save too large (#{body.bytesize}B > #{SAVE_MAX_BYTES}) -> reject")
+        return reply(conn, type: :save_err, reason: "too_large", max: SAVE_MAX_BYTES)
       end
 
       tid = env[:trainer_id]
@@ -840,7 +896,15 @@ module PEMK
       a = pending[:account]; a_conn = pending[:conn]; a_gives = pending[:give]
       b = account_id;        b_conn = conn;           b_gives = give
       @pool.submit do
-        st = @trades.execute_trade(trade_id, a: a, b: b, a_gives: a_gives, b_gives: b_gives)
+        # A raise here used to leave BOTH traders in :committing forever (no client
+        # timeout, and Trade.busy? then suppresses everything else) — audit. The
+        # transaction has already rolled back, so replying failure is always safe.
+        st = begin
+          @trades.execute_trade(trade_id, a: a, b: b, a_gives: a_gives, b_gives: b_gives)
+        rescue StandardError => e
+          @log.call("server: trade #{trade_id} #{a}<->#{b} raised #{e.class}: #{e.message}")
+          [:err, "error"]
+        end
         @reactor.post do
           if st.first == :ok || st.first == :ok_replay
             reply(a_conn, type: :trade_result, trade_id: trade_id, ok: true, recv: b_gives, gave: a_gives) if @reactor.alive?(a_conn)
@@ -987,11 +1051,22 @@ module PEMK
       if old && old != map
         @zones[old].delete(conn)
         broadcast_zone(old, conn, Wire.encode_split({ type: :leave, id: account_id }))
+        @zones.delete(old) if @zones[old].empty?   # reap AFTER the broadcast (audit: unbounded growth)
       end
       @zones[map].add(conn)
       conn.data[:map_id] = map
 
-      broadcast_zone(map, conn, Wire.encode_split(env.merge(id: account_id)))
+      # ALLOWLIST the fan-out frame instead of echoing the client's envelope: env.merge
+      # would relay every extra key the client attached (up to the 64 KiB envelope cap)
+      # to every peer on the map — a broadcast amplifier, and an injection surface.
+      broadcast_zone(map, conn, Wire.encode_split(presence_frame(env, account_id, map)))
+    end
+
+    # The only fields a presence frame may carry to peers.
+    def presence_frame(env, account_id, map)
+      out = { type: env[:type], id: account_id, map: map }
+      %i[x y dir mode].each { |k| out[k] = env[k] if env[k].is_a?(Integer) || env[k].is_a?(Symbol) }
+      out
     end
 
     def broadcast_zone(map, sender, frame)
@@ -1001,6 +1076,16 @@ module PEMK
     # Relay an addressed frame to ONLY the :to account's connection, re-stamping
     # :from with the server-trusted sender id and preserving the opaque body
     # (e.g. a battle team). Unknown/offline or self-addressed -> dropped.
+    #
+    # AUTHORIZATION (audit): the relay used to forward ANY of the 15 addressed types,
+    # with an unbounded body, to ANY online account. That was three weapons at once —
+    # a >OUTBUF_CAP body disconnected the victim, an unsolicited :battle_team made the
+    # victim Marshal.load attacker bytes, and a third party could inject into a live
+    # battle. Now: HANDSHAKE frames (invite/accept/decline) may reach a stranger — that
+    # is what an invite IS — but every PAYLOAD frame requires a live peer session that
+    # only a mutual accept creates, and every body is capped.
+    RELAY_BODY_MAX = 256 * 1024   # a Marshal'd battle team is a few KB
+
     def handle_addressed(sender, env, body, from_account)
       target = @online[env[:to]]
       if target.nil? || target.equal?(sender)
@@ -1008,7 +1093,48 @@ module PEMK
         return
       end
 
+      if body && body.bytesize > RELAY_BODY_MAX
+        @log.call("server: account #{from_account} oversized #{env[:type].inspect} body " \
+                  "(#{body.bytesize}B > #{RELAY_BODY_MAX}) -> drop")
+        return
+      end
+
+      unless relay_allowed?(env[:type], from_account, env[:to])
+        @log.call("server: account #{from_account} #{env[:type].inspect} -> #{env[:to].inspect} " \
+                  "without a peer session -> drop")
+        return
+      end
+
+      note_peer_session(env[:type], from_account, env[:to])
       @reactor.send_frame(target, Wire.encode_split(env.merge(from: from_account), body))
+    end
+
+    # Frames a stranger may legitimately send (the handshake itself).
+    HANDSHAKE = %i[challenge challenge_accept challenge_decline
+                   trade_invite trade_accept trade_decline].freeze
+
+    def relay_allowed?(type, from_account, to_account)
+      return true if HANDSHAKE.include?(type)
+
+      @peer_sessions[from_account] == to_account && @peer_sessions[to_account] == from_account
+    end
+
+    # A mutual accept opens the session; a decline/cancel/end closes it. Reactor-thread
+    # only (like @online/@zones), so a plain Hash is correct.
+    def note_peer_session(type, from_account, to_account)
+      case type
+      when :challenge_accept, :trade_accept
+        @peer_sessions[from_account] = to_account
+        @peer_sessions[to_account]   = from_account
+      when :challenge_decline, :trade_decline, :trade_cancel, :battle_end
+        clear_peer_session(from_account)
+        clear_peer_session(to_account)
+      end
+    end
+
+    def clear_peer_session(account_id)
+      partner = @peer_sessions.delete(account_id)
+      @peer_sessions.delete(partner) if partner && @peer_sessions[partner] == account_id
     end
 
     def bind(conn, account_id)
@@ -1031,13 +1157,17 @@ module PEMK
     def on_close(conn)
       aid = conn.data[:account_id]
       @online.delete(aid) if aid && @online[aid].equal?(conn)
-      cancel_pending_trades(aid, conn) if aid
+      if aid
+        cancel_pending_trades(aid, conn)
+        clear_peer_session(aid)   # a dropped account's peer session dies with it
+      end
 
       map = conn.data[:map_id]
       return unless map
 
       @zones[map].delete(conn)
       broadcast_zone(map, conn, Wire.encode_split({ type: :leave, id: aid })) if aid
+      @zones.delete(map) if @zones[map].empty?   # reap AFTER the broadcast
     end
 
     # A dropped account cancels any rendezvous it was part of. If a LONE committer

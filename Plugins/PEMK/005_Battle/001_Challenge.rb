@@ -44,6 +44,24 @@ module PEMK
       pbMessage(_INTL("Battle request sent to {1}...", names[choice]))
     end
 
+    # --- The consent gate for the peer channel -------------------------------
+    # A battle payload (:battle_team and the whole battle stream) may only be
+    # accepted from an account this player actually agreed to battle. Without
+    # this, ANY logged-in account could push bytes that BattleSetup.on_team
+    # Marshal.loads and a battle it launches — zero click (audit HIGH).
+    # The server enforces the same rule independently (@peer_sessions).
+    def self.agree_with(account_id)
+      @partner = account_id
+    end
+
+    def self.agreed_with?(account_id)
+      !account_id.nil? && @partner == account_id
+    end
+
+    def self.clear_partner
+      @partner = nil
+    end
+
     # --- Receiving: routed from Dispatch (runs inside the pump — no UI here) ---
     def self.on_message(msg)
       case msg[:type]
@@ -52,7 +70,11 @@ module PEMK
         @incoming = { :from => msg[:from], :name => msg[:name] || "?" }
       when :challenge_accept
         return unless msg[:to] == PEMK.self_id
+        # Only an account WE challenged may accept — otherwise a stranger's forged
+        # accept would make us send them our whole party (audit).
+        return unless @outgoing && msg[:from] == @outgoing
         @outgoing = nil
+        agree_with(msg[:from])              # opens the consent gate on the peer channel
         PEMK::BattleNet.set_host(true)      # we issued the challenge -> we host this battle
         BattleSetup.send_team(msg[:from])   # battle launches once both teams are in (no blocking prompt)
       when :challenge_decline
@@ -83,6 +105,7 @@ module PEMK
           elsif pbConfirmMessage(_INTL("{1} wants to battle! Accept?", inc[:name]))
             PEMK.send_message({ :type => :challenge_accept, :from => PEMK.self_id,
                                    :name => own_name, :to => inc[:from] })
+            agree_with(inc[:from])                    # the player consented -> open the gate
             PEMK::BattleNet.set_host(false)           # we accepted -> we replay (client)
             PEMK::BattleSetup.send_team(inc[:from])   # battle launches once both teams are in
           else

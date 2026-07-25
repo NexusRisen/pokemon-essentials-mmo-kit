@@ -100,8 +100,8 @@ class ServerMonTest < Minitest::Test
     register_login(b, "cloner@t.co")
     send_env(b, { type: :mon_party, seq: 1, mons: [{ uid: uid, species: :MEW, level: 50 }] })
     ack_b = recv(b)
-    assert_equal true, ack_b[:flagged]
-    assert_equal true, @db[:monsters].where(id: uid).get(:flagged)
+    assert_equal true, ack_b[:flagged]                                  # the PROJECTOR is flagged...
+    assert_equal false, @db[:monsters].where(id: uid).get(:flagged)     # ...the victim's mon is untouched
     b.close
 
     # And the victim's next login carries its mon_seq high-water.

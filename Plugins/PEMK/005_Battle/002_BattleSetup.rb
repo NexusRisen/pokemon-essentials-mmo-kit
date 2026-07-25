@@ -43,6 +43,15 @@ module PEMK
     # Routed from Dispatch (inside the pump — no blocking UI/battle here).
     def self.on_team(msg)
       return unless msg[:to] == PEMK.self_id
+      # CONSENT GATE (audit HIGH): only a peer this player actually agreed to battle
+      # may reach the Marshal.load below. Without it, any logged-in account could push
+      # arbitrary bytes we deserialize AND force us into a battle, zero click. The
+      # server enforces the same rule independently (@peer_sessions) — this is the
+      # belt to its braces, and it also protects against a hostile/patched server.
+      unless (PEMK::Challenge.agreed_with?(msg[:from]) rescue false)
+        PEMK.log("battle: unsolicited team from #{msg[:from].inspect} -> ignored")
+        return
+      end
       # Reconstruct the opponent party from the opaque body (our own decode, on the
       # addressed frame). Legacy :party kept as a fallback during migration.
       party = (msg[:_body] ? (Marshal.load(msg[:_body]) rescue nil) : msg[:party])

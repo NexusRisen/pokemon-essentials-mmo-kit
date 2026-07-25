@@ -89,6 +89,7 @@ module PEMK
       PEMK.log("battle: ended (outcome=#{outcome})")
       # PvP never fires :on_end_battle (no after_battle) -> arm the checkpoint here.
       (PEMK::Checkpoint.request(:pvp) rescue nil)
+      (PEMK::Challenge.clear_partner rescue nil)   # the consent gate closes with the battle
       outcome
     rescue => e
       PEMK.log("battle: run_battle error: #{e.class}: #{e.message}")
