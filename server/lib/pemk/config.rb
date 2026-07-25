@@ -11,7 +11,7 @@ module PEMK
                 :pickup_reset_allowed, :battle_data_path, :battle_enforce_teams,
                 :battle_enforce_encounters, :battle_enforce_catches, :battle_enforce_rewards,
                 :battle_enforce_exp, :battle_enforce_rng, :corpus_retention_days,
-                :battle_enforce_resim, :resim_min_strikes, :anomaly_detection
+                :battle_enforce_resim, :resim_min_strikes, :flag_state, :anomaly_detection
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -125,6 +125,14 @@ module PEMK
       # with D5's drift-tolerant calibration; 1 = immediate, harsher).
       raw = env.fetch("PEMK_RESIM_MIN_STRIKES", "").to_s.strip
       @resim_min_strikes = raw.match?(/\A[1-9]\d*\z/) ? raw.to_i : 2
+
+      # Audit item 4: the switches/variables/self-switches DETECTION shadow. off =
+      # nothing; shadow = record the snapshot and flag a self-switch rewind. `on` is
+      # RESERVED for part 2 (server-owned flags) and currently behaves as shadow —
+      # making the server authoritative here needs the world-vs-player ID partition,
+      # which is a game-design decision, not an engineering one.
+      fmode = env.fetch("PEMK_FLAG_STATE", "off").to_s.strip.downcase
+      @flag_state = %w[off shadow on].include?(fmode) ? fmode.to_sym : :off
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {

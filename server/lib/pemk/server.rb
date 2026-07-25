@@ -77,6 +77,9 @@ module PEMK
       if @config.battle_enforce_rng != :off
         @battle_records = BattleRecords.new(@db, mode: @config.battle_enforce_rng, logger: @log)
       end
+      # Audit item 4: switches/variables/self-switches detection shadow.
+      @flag_state = FlagState.new(@db, logger: @log) if @config.flag_state != :off
+      @gift_claims = GiftClaims.new(@db, logger: @log) if @config.flag_state != :off
       @audit      = Audit.new(@world, logger: @log)
       @pos_audit  = PositionAudit.new(@world, logger: @log, mode: @config.position_enforcement)   # M4 Layer B
       @pickups    = Pickups.new(@db)   # M4 Layer C one-shot ledger
@@ -142,6 +145,7 @@ module PEMK
       if @config.battle_enforce_catches == :on && @config.battle_enforce_encounters != :on
         @log.call("server: WARNING catch enforcement is on but encounter enforcement is #{@config.battle_enforce_encounters} — catches need a server encounter mint, so they will all fail-open to local")
       end
+      @log.call("server: flag state = #{@config.flag_state} (switches/variables shadow — detection-only#{@config.flag_state == :on ? '; `on` is reserved for part 2 and behaves as shadow' : ''})")
       @log.call("server: position enforcement = #{@config.position_enforcement} (M4 Layer B)")
       @log.call("server: pickup enforcement = #{@config.pickup_enforce ? 'on' : 'off'} (M4 Layer C server-mint)")
       @log.call("server: WARNING pickup reset ALLOWED (PEMK_ALLOW_PICKUP_RESET=on) — DEV ONLY, disable in production") if @config.pickup_reset_allowed
@@ -214,6 +218,7 @@ module PEMK
       # burst must absorb several back-to-back pushes; sustained 1/s is still ~100x an
       # honest client and bounds a flood to the blob cap per second.
       save: [10, 1.0], econ: [10, 4], inv: [10, 4], uid_req: [10, 4], mon_party: [10, 4],
+      flags: [10, 1.0], gift_claim: [20, 4],
       encounter_req: [10, 2], catch_req: [20, 6], battle_record: [6, 1], trade_commit: [6, 2],
       team_check: [10, 2], pickup_req: [20, 6], interact_claim: [30, 10],
       pos: [40, 20], dir: [40, 20], step: [40, 20], spawn: [10, 2]
@@ -253,6 +258,8 @@ module PEMK
       when :catch_report then handle_catch_report(conn, env, authed)
       when :battle_end_report then handle_battle_end(conn, env, authed)
       when :battle_record then handle_battle_record(env, body, authed)
+      when :flags then handle_flags(conn, env, authed)
+      when :gift_claim then handle_gift_claim(env, authed)
       when :trade_commit then handle_trade_commit(conn, env, authed)
       when :pos, :dir, :step, :spawn then handle_presence(conn, env, authed)
       when *ADDRESSED then handle_addressed(conn, env, body, authed)
@@ -763,6 +770,35 @@ module PEMK
       reply(conn, **grant)
     end
 
+    # Audit item 4: the switches/variables/self-switches DETECTION shadow. An absolute
+    # snapshot on the account mailbox (the :inv pattern). Detection-only: a self-switch
+    # REWIND (one-shot events re-armed = the NPC-gift/TM/key-item re-farm) is logged and
+    # feeds the D5 review queue; nothing is ever rejected or corrected.
+    def handle_flags(conn, env, account_id)
+      return unless @flag_state
+
+      seq = env[:seq]
+      payload = { switches: env[:switches], variables: env[:variables], self_switches: env[:self_switches] }
+      @mailbox.submit(account_id) do
+        status, flags = @flag_state.apply_flags(account_id, payload, seq)
+        flag_anomaly(account_id, :flag_rewind) if flags&.include?("rewind")
+        @reactor.post { reply(conn, type: :flags_ack, seq: seq, flagged: status == :ack && flags.any?) }
+      end
+    end
+
+    # Audit item 4 (second half): an NPC gift / event-granted item. Fire-and-forget
+    # DETECTION — the ledger records which one-shot event granted what, so a re-farm
+    # (self-switch rewind -> the same event pays out again) leaves a trace naming it.
+    def handle_gift_claim(env, account_id)
+      return unless @gift_claims
+
+      map = env[:map]; event = env[:event]; item = env[:item].to_s; qty = env[:quantity]
+      @mailbox.submit(account_id) do
+        verdict = @gift_claims.claim(account_id, map, event, item, qty)
+        flag_anomaly(account_id, :gift_refarm) if verdict == :suspect
+      end
+    end
+
     # M4 Layer D D7 part 1: a finished wild battle's capture record (fire-and-forget,
     # no reply — instrumentation, never adjudicates). The opaque body is stored
     # verbatim for part 2's headless replay; ingest runs on the account mailbox so the
@@ -1030,7 +1066,8 @@ module PEMK
         battle_enforce_rewards: @config.battle_enforce_rewards.to_s,         # M4 Layer D D4 reward mode
         battle_enforce_exp: @config.battle_enforce_exp.to_s,                 # M4 Layer D D6 EXP mode
         battle_enforce_rng: @config.battle_enforce_rng.to_s,                 # M4 Layer D D7 rng/capture mode
-        battle_enforce_resim: @config.battle_enforce_resim.to_s }            # M4 Layer D D8 enforcement mode
+        battle_enforce_resim: @config.battle_enforce_resim.to_s,             # M4 Layer D D8 enforcement mode
+        flag_state: @config.flag_state.to_s }                                # audit item 4: flags shadow
     end
 
     # Zone-scoped presence: track each player's current map and fan a position

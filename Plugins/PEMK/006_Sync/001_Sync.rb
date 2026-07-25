@@ -24,6 +24,7 @@ module PEMK
     @inv_dirty   = false        # bag changed since the last flush -> re-read the WHOLE bag once at flush
     @mon_dirty   = false        # monsters may need uids / the party projection may have changed
     @mon_last    = nil          # hash of the last-sent party projection (send only on change)
+    @flag_last   = nil          # hash of the last-sent switches/variables snapshot (send only on change)
     @team_last   = nil          # hash of the last-sent full-stat team (M4 Layer D legality; send on change)
     @seq         = Hash.new(0)  # channel => monotonic seq (adopted from the server on login)
     @dirty_since = nil
@@ -40,6 +41,7 @@ module PEMK
       @inv_dirty = false
       @mon_dirty = false
       @mon_last = nil
+      @flag_last = nil
       @team_last = nil
       (PEMK::Monsters.reset rescue nil)
       (PEMK::Trade.reset rescue nil)   # a fresh socket must abandon any in-flight trade
@@ -50,6 +52,7 @@ module PEMK
       (PEMK::ExpCorrect.reset rescue nil) # ... and any pending EXP restore + mode (M4-D6)
       (PEMK::BattleRng.reset rescue nil)  # ... and any pending battle seed + mode (M4-D7)
       (PEMK::Challenge.clear_partner rescue nil)  # ... and the peer consent gate (a new socket agreed to nothing)
+      (PEMK::Flags.reset rescue nil)      # ... and the advertised flag-shadow mode
       @seq = Hash.new(0)
       @dirty_since = nil
       @last_change = nil
@@ -140,6 +143,18 @@ module PEMK
 
       @econ.each do |field, value|
         c.send_message({ :type => :econ, :field => field, :value => value, :seq => (@seq[:economy] += 1) })
+      end
+      # Switches/variables/self-switches: one whole-state read HERE (game thread),
+      # sent as an absolute snapshot and hash-gated so an unchanged story costs
+      # nothing. Detection shadow — the server records it and flags a rewind.
+      if (PEMK::Flags.active? rescue false)
+        snap = (PEMK::Flags.projection rescue nil)
+        if snap && snap.hash != @flag_last
+          c.send_message({ :type => :flags, :switches => snap[:switches],
+                           :variables => snap[:variables], :self_switches => snap[:self_switches],
+                           :seq => (@seq[:flags] += 1) })
+          @flag_last = snap.hash
+        end
       end
       # Bag: one whole-bag read HERE (game thread), sent as an absolute snapshot.
       # An empty bag ({}) is a valid send; only a nil (no $bag yet) keeps the flag.

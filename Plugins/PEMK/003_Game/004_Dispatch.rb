@@ -51,6 +51,9 @@ module PEMK
       when :uid_grant
         # Server-minted monster identities: matched to instances by persisted nonce.
         Monsters.on_grant(msg)
+      when :flags_ack
+        # Switches/variables shadow telemetry (detection-only): log, never write.
+        Flags.on_ack(msg)
       when :mon_ack
         # Party-projection telemetry (detection-only): log a flag, never write.
         Monsters.on_ack(msg)
