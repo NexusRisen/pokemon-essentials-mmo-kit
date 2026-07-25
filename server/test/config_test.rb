@@ -127,6 +127,25 @@ class ConfigTest < Minitest::Test
     assert_equal 30, PEMK::Config.new(env: ENV.to_h.merge("PEMK_CORPUS_RETENTION_DAYS" => "junk")).corpus_retention_days
   end
 
+  # M4 Layer D D8: resim enforcement — its OWN flag (operator contract), default off.
+  def test_battle_enforce_resim_defaults_off_and_reads_env
+    env = ENV.to_h
+    env.delete("PEMK_BATTLE_ENFORCE_RESIM")
+    assert_equal :off,    PEMK::Config.new(env: env).battle_enforce_resim
+    assert_equal :shadow, PEMK::Config.new(env: ENV.to_h.merge("PEMK_BATTLE_ENFORCE_RESIM" => "shadow")).battle_enforce_resim
+    assert_equal :on,     PEMK::Config.new(env: ENV.to_h.merge("PEMK_BATTLE_ENFORCE_RESIM" => "ON")).battle_enforce_resim
+    assert_equal :off,    PEMK::Config.new(env: ENV.to_h.merge("PEMK_BATTLE_ENFORCE_RESIM" => "junk")).battle_enforce_resim
+  end
+
+  def test_resim_min_strikes_defaults_and_reads_env
+    env = ENV.to_h
+    env.delete("PEMK_RESIM_MIN_STRIKES")
+    assert_equal 2, PEMK::Config.new(env: env).resim_min_strikes
+    assert_equal 1, PEMK::Config.new(env: ENV.to_h.merge("PEMK_RESIM_MIN_STRIKES" => "1")).resim_min_strikes
+    assert_equal 2, PEMK::Config.new(env: ENV.to_h.merge("PEMK_RESIM_MIN_STRIKES" => "0")).resim_min_strikes   # 0 invalid -> default
+    assert_equal 2, PEMK::Config.new(env: ENV.to_h.merge("PEMK_RESIM_MIN_STRIKES" => "junk")).resim_min_strikes
+  end
+
   # M4 Layer D D5: anomaly detection, binary on/off, default off.
   def test_anomaly_detection_defaults_off_and_reads_env
     env = ENV.to_h

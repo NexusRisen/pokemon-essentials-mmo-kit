@@ -106,6 +106,10 @@ module PEMK
       @log.call("server: anomaly detection = #{@config.anomaly_detection ? 'on' : 'off'} (M4 Layer D D5, review-queue only)")
       @log.call("server: exp authority = #{@config.battle_enforce_exp} (M4 Layer D D6; on = up-only restore to high-water)")
       @log.call("server: battle rng = #{@config.battle_enforce_rng} (M4 Layer D D7 part 1 — instrumentation, never rejects)")
+      @log.call("server: resim enforcement = #{@config.battle_enforce_resim} (M4 Layer D D8 — walk-tier quarantine, strikes=#{@config.resim_min_strikes})")
+      if @config.battle_enforce_resim != :off && @config.battle_enforce_rng != :on
+        @log.call("server: WARNING resim enforcement is #{@config.battle_enforce_resim} but battle rng is #{@config.battle_enforce_rng} — no seeds/records means nothing can ever be verified or condemned")
+      end
       if @config.battle_enforce_rewards != :off && @config.battle_enforce_encounters != :on
         @log.call("server: WARNING reward detection is on but encounter enforcement is #{@config.battle_enforce_encounters} — no foe context, so battle windows can't open")
       end
@@ -918,7 +922,8 @@ module PEMK
         battle_enforce_catches: @config.battle_enforce_catches.to_s,         # M4 Layer D D3 catch mode
         battle_enforce_rewards: @config.battle_enforce_rewards.to_s,         # M4 Layer D D4 reward mode
         battle_enforce_exp: @config.battle_enforce_exp.to_s,                 # M4 Layer D D6 EXP mode
-        battle_enforce_rng: @config.battle_enforce_rng.to_s }                # M4 Layer D D7 rng/capture mode
+        battle_enforce_rng: @config.battle_enforce_rng.to_s,                 # M4 Layer D D7 rng/capture mode
+        battle_enforce_resim: @config.battle_enforce_resim.to_s }            # M4 Layer D D8 enforcement mode
     end
 
     # Zone-scoped presence: track each player's current map and fan a position
