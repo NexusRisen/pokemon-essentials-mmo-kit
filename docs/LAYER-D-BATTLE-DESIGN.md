@@ -84,6 +84,21 @@
 > trade-griefing false-positive (owner- vs issuer-grouping). Tier 1 detection is now
 > complete. Next: D6 (per-mon EXP/level authority) or the engine tier (D7+).
 
+> **Progress (2026-07-25): D6 part 1 shipped (per-mon EXP high-water + rollback detection).**
+> The foundation of per-mon EXP authority, still detection-only. The party projection now
+> carries each mon's `:exp`; the server keeps a per-UID **high-water** (`monster_stats`,
+> migration 011 additive) — the most EXP a mon has ever legitimately reported. EXP never
+> decreases in normal play, so a reported EXP BELOW the high-water is a save-rollback / edit
+> (a distinct signal from D4, which bounds EXP *increases*). Only uids the account **owns**
+> are tracked (a client can't move another mon's high-water); the high-water is never
+> downgraded. A rollback is flagged **once per high-water** via a `rollback_flagged` latch,
+> cleared only when EXP climbs back past it — a single no-fault crash (a restored save behind
+> the live high-water) re-projects the low EXP on every subsequent frame and un-latched would
+> flood the D5 queue; it now yields one flag (D5 `exp_rollback` threshold 3). Adversarial
+> review caught exactly this per-frame re-flag amplifier. `PEMK_BATTLE_ENFORCE_EXP` tri-state,
+> default off. Part 2 (`on`: reconcile the client party to the server high-water at login) is
+> the risky save-migration and remains ahead.
+
 This document answers the last open question in the anti-cheat ladder: **how does
 the server independently decide what a battle produced — the Pokémon that
 appears, the one you catch, the EXP/money/drops you earn, and who wins a ranked
@@ -398,6 +413,12 @@ authority; Tier 3 is the deferred, parity-gated engine.
   shadow without breaking the single-player-shaped save flow.
 - **Enforcement ramp:** detect (level/EXP drift via the party shadow) → shadow → on
   (server-owned per-mon EXP/level is canonical); flips D4's EXP sub-facet to enforce.
+- **Fork caveat (open-source operators):** the high-water assumes strictly-monotonic EXP.
+  Vanilla Essentials never lowers a mon's EXP (the level cap plateaus, eggs grow from 0,
+  hatching keeps the object, trades only move ownership), so the base kit is safe. A fork
+  that *clamps EXP downward* — a hard cap refunding overflow, set-level battle rooms — would
+  produce a legitimate decrease and read as a rollback. Keep such forks on `shadow` (never
+  `on` with `PEMK_ANOMALY_DETECTION`) until they teach the server about the clamp.
 
 ### Tier 3 — Engine-reuse re-simulation (deferred, parity-gated)
 

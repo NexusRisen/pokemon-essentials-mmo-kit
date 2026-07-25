@@ -132,7 +132,11 @@ module PEMK
     def projection
       return nil unless $player&.party
 
-      $player.party.map { |p| { :uid => p.pemk_uid, :species => p.species, :level => p.level } }
+      # exp rides the projection for M4-D6 (server per-mon EXP high-water + rollback detect);
+      # old servers ignore the extra key. rescue -> exp omitted, never breaks the projection.
+      $player.party.map do |p|
+        { :uid => p.pemk_uid, :species => p.species, :level => p.level, :exp => (p.exp rescue nil) }
+      end
     rescue => e
       PEMK.log("mon: projection error: #{e.class}: #{e.message}")
       nil

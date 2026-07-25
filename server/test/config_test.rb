@@ -97,6 +97,16 @@ class ConfigTest < Minitest::Test
     assert_equal :off,    PEMK::Config.new(env: ENV.to_h.merge("PEMK_BATTLE_ENFORCE_REWARDS" => "junk")).battle_enforce_rewards
   end
 
+  # M4 Layer D D6: per-mon EXP authority, off/shadow/on tri-state, default off.
+  def test_battle_enforce_exp_defaults_off_and_reads_env
+    env = ENV.to_h
+    env.delete("PEMK_BATTLE_ENFORCE_EXP")
+    assert_equal :off,    PEMK::Config.new(env: env).battle_enforce_exp
+    assert_equal :shadow, PEMK::Config.new(env: ENV.to_h.merge("PEMK_BATTLE_ENFORCE_EXP" => "shadow")).battle_enforce_exp
+    assert_equal :on,     PEMK::Config.new(env: ENV.to_h.merge("PEMK_BATTLE_ENFORCE_EXP" => "ON")).battle_enforce_exp
+    assert_equal :off,    PEMK::Config.new(env: ENV.to_h.merge("PEMK_BATTLE_ENFORCE_EXP" => "junk")).battle_enforce_exp
+  end
+
   # M4 Layer D D5: anomaly detection, binary on/off, default off.
   def test_anomaly_detection_defaults_off_and_reads_env
     env = ENV.to_h
