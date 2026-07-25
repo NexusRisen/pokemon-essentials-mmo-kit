@@ -3,6 +3,7 @@ require "socket"
 require "timeout"
 require "sequel"
 require "json"
+require "tmpdir"
 
 root  = File.expand_path("..", __dir__)
 lib   = File.join(root, "lib")
@@ -35,11 +36,30 @@ class ServerExpTest < Minitest::Test
     @db&.disconnect
   end
 
-  def start_server(exp: "shadow")
+  def start_server(exp: "shadow", rewards: nil)
     env = ENV.to_h.merge("PEMK_BATTLE_ENFORCE_EXP" => exp)
+    if rewards
+      env["PEMK_BATTLE_ENFORCE_REWARDS"] = rewards
+      env["PEMK_BATTLE_DATA"] = synthetic_battle_data   # level-jump judging needs growth CURVES
+    end
     @server = PEMK::Server.new(config: PEMK::Config.new(env: env), logger: ->(m) { @logs << m })
     @server.start
     @port = @server.port
+  end
+
+  # A minimal battle_data.json WITH a growth curve (the repo export may predate the D4
+  # curve field, which silently no-ops level-jump judging) — keeps this test self-contained.
+  def synthetic_battle_data
+    curve = (1..100).map { |l| l**3 }   # any strictly-increasing cumulative curve works
+    doc = {
+      "schema_version" => 1,
+      "caps"           => { "max_level" => 100 },
+      "growth_rates"   => { "Parabolic" => { "max_exp" => 1_000_000, "curve" => curve } },
+      "species"        => { "PIDGEY" => { "growth_rate" => "Parabolic", "base_exp" => 50 } }
+    }
+    path = File.join(Dir.tmpdir, "pemk_test_battle_data_#{Process.pid}.json")
+    File.write(path, JSON.generate(doc))
+    path
   end
 
   def open_conn; TCPSocket.new("127.0.0.1", @port); end
@@ -104,6 +124,67 @@ class ServerExpTest < Minitest::Test
     party(c, uid, 100, 3, 3)
     refute(@logs.any? { |l| l.include?("rollback") })
     assert_equal 0, @db[:monster_stats].count
+    c.close
+  end
+
+  # --- D6 part 2: the :on restore plan over the wire ----------------------------
+
+  def test_on_mode_ack_carries_up_only_corrections_until_the_restore_lands
+    start_server(exp: "on")
+    c, login = authed_conn("xp3@t.co")
+    assert_equal "on", login[:battle_enforce_exp]               # reconcile advertises the mode
+    uid = mint_uid(c, seq: 1)
+
+    ack = party(c, uid, 1_500, 8, 2)                            # establishes high-water 1500
+    assert_nil ack[:exp_correct], ack.inspect                   # clean -> no plan
+
+    ack = party(c, uid, 600, 5, 3)                              # below high-water (old save)
+    assert_equal [{ uid: uid, exp: 1_500 }], ack[:exp_correct]  # up-only restore plan
+
+    ack = party(c, uid, 600, 5, 4)                              # not applied yet -> RE-emitted
+    assert_equal [{ uid: uid, exp: 1_500 }], ack[:exp_correct]  # (client guard makes it a no-op)
+
+    ack = party(c, uid, 1_500, 8, 5)                            # the restore landed
+    assert_nil ack[:exp_correct], ack.inspect                   # self-terminating
+    assert_equal 1_500, @db[:monster_stats].where(uid: uid).get(:exp)
+    c.close
+  end
+
+  # The restore's own level jump must NOT trip the D4 reward audit (no battle window is
+  # open, so an unexempted jump would SUSPECT-flag the server's own correction) — while a
+  # jump BEYOND the restored level is still judged normally.
+  def test_restore_level_jump_is_exempt_from_the_reward_audit
+    start_server(exp: "on", rewards: "shadow")
+    c, = authed_conn("xp5@t.co")
+    uid = mint_uid(c, seq: 1)
+
+    party(c, uid, 800, 10, 2)                                   # high-water {exp 800, lvl 10}
+    ack = party(c, uid, 300, 7, 3)                              # rollback -> restore plan + exemption armed
+    assert_equal [{ uid: uid, exp: 800 }], ack[:exp_correct]
+
+    party(c, uid, 800, 10, 4)                                   # the restore lands: jump 7->10, no window
+    refute(@logs.any? { |l| l.include?("SUSPECT level jump") },
+           "the server flagged its own restore: #{@logs.grep(/reward:/).inspect}")
+
+    party(c, uid, 30_000, 25, 5)                                # a REAL unbudgeted jump 10->25
+    assert(@logs.any? { |l| l.include?("SUSPECT level jump") },
+           "post-exemption jumps must still be judged: #{@logs.grep(/reward:/).inspect}")
+    c.close
+  end
+
+  def test_shadow_mode_logs_the_plan_but_never_emits_it
+    start_server(exp: "shadow")
+    c, login = authed_conn("xp4@t.co")
+    assert_equal "shadow", login[:battle_enforce_exp]
+    uid = mint_uid(c, seq: 1)
+
+    party(c, uid, 1_200, 7, 2)
+    ack = party(c, uid, 300, 3, 3)                              # rollback
+    assert_nil ack[:exp_correct], ack.inspect                   # shadow NEVER puts the plan on the wire
+    assert_equal 1, exp_log.count { |l| l.include?("would restore uid#{uid}->1200") }, exp_log.inspect
+
+    party(c, uid, 300, 3, 4)                                    # re-projected -> latched, no re-log
+    assert_equal 1, exp_log.count { |l| l.include?("would restore") }, exp_log.inspect
     c.close
   end
 end

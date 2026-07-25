@@ -142,9 +142,15 @@ module PEMK
       nil
     end
 
-    # :mon_ack is telemetry — log a server flag; nothing is ever written back.
+    # :mon_ack is telemetry — log a server flag; nothing is ever written back —
+    # EXCEPT the M4-D6 part 2 up-only EXP restore plan (:exp_correct), which is
+    # handed to ExpCorrect for a safe-frame apply (only ever RAISES exp; dormant
+    # unless the server advertised battle_enforce_exp=on).
     def on_ack(msg)
-      PEMK.log("mon: server flagged party (seq #{msg[:seq]})") if msg && msg[:flagged]
+      return unless msg
+
+      PEMK.log("mon: server flagged party (seq #{msg[:seq]})") if msg[:flagged]
+      (PEMK::ExpCorrect.request(msg[:exp_correct]) rescue nil) if msg[:exp_correct]
     end
 
     # --- M3.2 trade helpers -----------------------------------------------------

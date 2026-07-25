@@ -11,8 +11,16 @@ module PEMK
   # write on a uid (which is globally unique and owned by exactly one account) has no
   # concurrent writer — no locks needed.
   class MonsterStats
-    def initialize(db)
-      @db = db
+    # Absolute EXP sanity ceiling when the species/curve is unknown (no battle_data
+    # export, unknown species): comfortably above every vanilla growth rate's level-100
+    # EXP (Fluctuating tops out at 1,640,000). A projected EXP above the cap is stored
+    # CLAMPED — the high-water must never memorize (part 1) nor re-impose (part 2's
+    # restore) an impossible value a hacked client once reported.
+    FALLBACK_EXP_CAP = 2_000_000
+
+    def initialize(db, battle: nil)
+      @db     = db
+      @battle = battle   # BattleData (optional) -> per-species growth-curve caps
     end
 
     # entries: [{uid:, exp:, level:}, ...] from the party projection. Only uids this
@@ -41,7 +49,8 @@ module PEMK
       stats = @db[:monster_stats].where(uid: owned).to_hash(:uid)   # {uid => row}, one query
       rollbacks = []
       owned.each do |uid|
-        e = by_uid[uid]; exp = e[:exp]; level = int_or(e[:level], 0)
+        e = by_uid[uid]; level = int_or(e[:level], 0)
+        exp = [e[:exp], exp_cap(e[:species])].min   # sanity-clamp: never memorize the impossible
         row = stats[uid]
         if row.nil?
           insert_row(uid, exp, level, now)
@@ -61,6 +70,38 @@ module PEMK
     # The server's high-water for a uid (nil if untracked) — for part-2 reconcile + tests.
     def exp_for(uid)
       @db[:monster_stats].where(uid: uid).get(:exp)
+    end
+
+    # D6 part 2 (`on`): the UP-ONLY restore plan. For each OWNED uid whose stored
+    # high-water exceeds the reported exp -> {uid:, exp: high_water, level: stored_level}.
+    # Read-only (observe() owns the latch + writes) and bounded by the party projection
+    # (<=6 entries). :level is SERVER-INTERNAL (the level recorded at the high-water) —
+    # the caller strips it from the wire and uses it to exempt the restore's own level
+    # jump from the D4 reward audit. The caller re-emits this every below-frame — the
+    # client's own up-only guard makes a re-send a no-op, and once the restore lands the
+    # next projection reports AT the high-water and the plan goes empty (self-terminating).
+    def corrections(account_id, entries)
+      by_uid = {}
+      entries.each do |e|
+        u = e[:uid]
+        next unless u.is_a?(Integer) && e[:exp].is_a?(Integer) && e[:exp] >= 0
+        by_uid[u] ||= e
+      end
+      return [] if by_uid.empty?
+
+      owned = owned_uids(account_id, by_uid.keys)
+      return [] if owned.empty?
+
+      stats = @db[:monster_stats].where(uid: owned).to_hash(:uid)
+      out = []
+      owned.each do |uid|
+        row = stats[uid]
+        next unless row
+
+        hw = [row[:exp], exp_cap(by_uid[uid][:species])].min   # belt: never EMIT the impossible either
+        out << { uid: uid, exp: hw, level: row[:level] } if hw > by_uid[uid][:exp]
+      end
+      out
     end
 
     private
@@ -85,6 +126,18 @@ module PEMK
 
     def int_or(v, default)
       v.is_a?(Integer) ? v : default
+    end
+
+    # The most EXP +species+ can legitimately hold: its growth curve's level-cap value
+    # (battle_data export), else the global fallback (no export / unknown species).
+    def exp_cap(species)
+      if @battle
+        sp   = @battle.species(species.to_s)
+        rate = sp && sp["growth_rate"]
+        cap  = rate && @battle.growth_rate_max_exp(rate)
+        return cap if cap.is_a?(Integer) && cap.positive?
+      end
+      FALLBACK_EXP_CAP
     end
   end
 end
