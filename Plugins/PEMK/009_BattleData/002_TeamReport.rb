@@ -30,6 +30,11 @@ module PEMK
 
     def mon(p)
       {
+        # uid BINDS this stat block to the server registry. Without it the audit
+        # validated stats belonging to nobody, which is exactly how a counterfeit mon
+        # could carry a valid uid and a clean provenance (audit item 5). nil while a
+        # mint is still in flight — legal, the server just can't lock it yet.
+        "uid"     => (p.pemk_uid rescue nil),
         "species" => species_key(p),
         "level"   => p.level,
         "ivs"     => stat_hash(p.iv),
@@ -37,7 +42,10 @@ module PEMK
         "moves"   => move_ids(p),
         "ability" => sym_or_nil(p.ability_id),
         "nature"  => nature_of(p),
-        "item"    => sym_or_nil(p.item_id)
+        "item"    => sym_or_nil(p.item_id),
+        # locked-for-life traits (derived from personalID at creation)
+        "shiny"   => (p.shiny? ? true : false rescue false),
+        "gender"  => (p.gender rescue nil)
       }
     end
 

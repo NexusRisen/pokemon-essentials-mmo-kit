@@ -54,6 +54,9 @@ module PEMK
       @battle     = BattleData.new(@config.battle_data_path, logger: @log)   # M4 Layer D read model
       @team_audit = TeamAudit.new(@battle, mode: @config.battle_enforce_teams,
                                   party_max: @config.monster_caps[:party_max], logger: @log)   # M4 Layer D D1
+      # Audit item 5: the per-mon stat block (first-sight identity lock). Rides the
+      # existing D1 team flag rather than adding a 12th knob.
+      @monster_blocks = MonsterBlocks.new(@db, logger: @log) if @config.battle_enforce_teams != :off
       @encounter_mint = EncounterMint.new(@world, logger: @log)   # M4 Layer D D2 wild-encounter roller
       @catch_calc = CatchCalc.new(@battle)                        # M4 Layer D D3 capture adjudication
       # M4 Layer D D4 wild-battle reward bounds (detection). Only active when the operator
@@ -671,7 +674,33 @@ module PEMK
     # legality result rides the ack for future client-side UX.
     def handle_team_check(conn, env, account_id)
       verdict = @team_audit.check(account_id, env[:team])
+      observe_blocks(account_id, env[:team])
       reply(conn, type: :team_ack, seq: env[:seq], legal: (verdict[:legal] != false))
+    end
+
+    # Audit item 5: lock each owned mon's identity traits on first sight and flag a
+    # later report that violates them (a counterfeit carrying a valid uid). On the
+    # account mailbox — DB work, and it must serialize with the mint that creates the
+    # registry row it keys on.
+    def observe_blocks(account_id, team)
+      return unless @monster_blocks && team.is_a?(Array)
+
+      entries = team.map do |m|
+        next unless m.is_a?(Hash)
+
+        { uid: m["uid"] || m[:uid], species: m["species"] || m[:species],
+          level: m["level"] || m[:level], ivs: m["ivs"] || m[:ivs], evs: m["evs"] || m[:evs],
+          moves: m["moves"] || m[:moves], ability: m["ability"] || m[:ability],
+          nature: m["nature"] || m[:nature], item: m["item"] || m[:item],
+          shiny: m["shiny"].nil? ? m[:shiny] : m["shiny"],
+          gender: m["gender"] || m[:gender] }
+      end.compact
+      return if entries.empty?
+
+      @mailbox.submit(account_id) do
+        diverged = @monster_blocks.observe(account_id, entries)
+        flag_anomaly(account_id, :mon_counterfeit) unless diverged.empty?
+      end
     end
 
     # M4 Layer D D2 (shadow): the client reports the wild encounter it rolled LOCALLY;
