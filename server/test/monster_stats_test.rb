@@ -91,4 +91,70 @@ class MonsterStatsTest < Minitest::Test
     assert_equal 900, @ms.exp_for(u1)
     assert_equal 300, @ms.exp_for(u2)
   end
+
+  # --- D6 part 2: the up-only restore plan --------------------------------------
+
+  def test_corrections_lists_only_below_high_water_mons
+    u1 = uid_for(@a); u2 = uid_for(@a)
+    @ms.observe(@a, [{ uid: u1, exp: 1_200, level: 7 }, { uid: u2, exp: 500, level: 5 }])
+    plan = @ms.corrections(@a, [{ uid: u1, exp: 400, level: 4 },     # below -> restore to 1200
+                                { uid: u2, exp: 500, level: 5 }])    # at the high-water -> clean
+    assert_equal [{ uid: u1, exp: 1_200, level: 7 }], plan   # :level = at-high-water level (server-internal)
+  end
+
+  # The high-water must never MEMORIZE (observe) nor RE-IMPOSE (corrections) an
+  # impossible EXP a hacked client once projected: absurd values store CLAMPED.
+  def test_observe_clamps_absurd_exp_to_the_sanity_cap
+    u = uid_for(@a)
+    @ms.observe(@a, [{ uid: u, exp: 2**40, level: 100 }])
+    assert_equal PEMK::MonsterStats::FALLBACK_EXP_CAP, @ms.exp_for(u)   # no battle_data -> global cap
+    plan = @ms.corrections(@a, [{ uid: u, exp: 100, level: 2 }])
+    assert_equal PEMK::MonsterStats::FALLBACK_EXP_CAP, plan[0][:exp]    # restore target is capped too
+  end
+
+  def test_exp_cap_uses_the_species_growth_curve_when_battle_data_is_present
+    battle = Class.new do
+      def species(id)
+        { "growth_rate" => "Medium" } if id == "PIDGEY"
+      end
+
+      def growth_rate_max_exp(rate)
+        1_000_000 if rate == "Medium"
+      end
+    end.new
+    ms = PEMK::MonsterStats.new(@db, battle: battle)
+    u = uid_for(@a)
+    ms.observe(@a, [{ uid: u, exp: 2**40, level: 100, species: "PIDGEY" }])
+    assert_equal 1_000_000, ms.exp_for(u)                               # per-species curve cap
+    u2 = uid_for(@a)
+    ms.observe(@a, [{ uid: u2, exp: 2**40, level: 100, species: "UNKNOWNMON" }])
+    assert_equal PEMK::MonsterStats::FALLBACK_EXP_CAP, ms.exp_for(u2)   # unknown species -> fallback
+  end
+
+  def test_corrections_is_empty_when_clean_or_above
+    u = uid_for(@a)
+    @ms.observe(@a, [{ uid: u, exp: 1_000, level: 6 }])
+    assert_empty @ms.corrections(@a, [{ uid: u, exp: 1_000, level: 6 }])   # equal
+    assert_empty @ms.corrections(@a, [{ uid: u, exp: 1_500, level: 8 }])   # above (growth)
+    assert_empty @ms.corrections(@a, [])                                   # nothing reported
+  end
+
+  def test_corrections_ignores_unowned_and_untracked_uids
+    ua = uid_for(@a); ub = uid_for(@b)
+    @ms.observe(@a, [{ uid: ua, exp: 900, level: 6 }])
+    @ms.observe(@b, [{ uid: ub, exp: 900, level: 6 }])
+    # A reports B's mon below its high-water -> NOT corrected for A (unowned);
+    # an untracked uid (no monster_stats row) -> nothing to restore to.
+    untracked = uid_for(@a)
+    plan = @ms.corrections(@a, [{ uid: ub, exp: 100, level: 2 }, { uid: untracked, exp: 100, level: 2 }])
+    assert_empty plan
+  end
+
+  def test_corrections_does_not_write_anything
+    u = uid_for(@a)
+    @ms.observe(@a, [{ uid: u, exp: 1_200, level: 7 }])
+    before = @db[:monster_stats].where(uid: u).first
+    @ms.corrections(@a, [{ uid: u, exp: 400, level: 4 }])
+    assert_equal before, @db[:monster_stats].where(uid: u).first   # read-only (observe owns writes)
+  end
 end

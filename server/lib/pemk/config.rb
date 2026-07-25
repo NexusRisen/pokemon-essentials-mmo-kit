@@ -89,8 +89,10 @@ module PEMK
 
       # M4 Layer D D6: per-mon EXP authority. off = nothing; shadow = the server tracks each
       # owned mon's EXP high-water from the party projection and flags a ROLLBACK (reported
-      # EXP below the high-water = old save / edit); on = (part 2) reconcile the client's
-      # party to the server EXP at login. Default off. Detection-only in part 1.
+      # EXP below the high-water = old save / edit), and logs the restore it WOULD send;
+      # on = the :mon_ack additionally carries an UP-ONLY restore plan the client applies
+      # (raise each below-high-water party mon back to the high-water — never lowers, so a
+      # crash's earned-but-lost EXP is given back). Default off.
       xmode = env.fetch("PEMK_BATTLE_ENFORCE_EXP", "off").to_s.strip.downcase
       @battle_enforce_exp = %w[off shadow on].include?(xmode) ? xmode.to_sym : :off
 

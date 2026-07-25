@@ -64,8 +64,9 @@ module PEMK
       @anomaly = AnomalyDetector.new(@db, @world, logger: @log) if @config.anomaly_detection
       @last_anomaly_sweep = nil
       @anomaly_sweeping   = false
-      # M4 Layer D D6: per-mon EXP high-water + rollback detection (part 1).
-      @monster_stats = MonsterStats.new(@db) if @config.battle_enforce_exp != :off
+      # M4 Layer D D6: per-mon EXP high-water + rollback detection (part 1) + the :on
+      # up-only restore (part 2). battle_data supplies per-species EXP sanity caps.
+      @monster_stats = MonsterStats.new(@db, battle: @battle) if @config.battle_enforce_exp != :off
       @audit      = Audit.new(@world, logger: @log)
       @pos_audit  = PositionAudit.new(@world, logger: @log, mode: @config.position_enforcement)   # M4 Layer B
       @pickups    = Pickups.new(@db)   # M4 Layer C one-shot ledger
@@ -99,7 +100,7 @@ module PEMK
       @log.call("server: catch enforcement = #{@config.battle_enforce_catches} (M4 Layer D D3)")
       @log.call("server: reward enforcement = #{@config.battle_enforce_rewards} (M4 Layer D D4, detection-only)")
       @log.call("server: anomaly detection = #{@config.anomaly_detection ? 'on' : 'off'} (M4 Layer D D5, review-queue only)")
-      @log.call("server: exp authority = #{@config.battle_enforce_exp} (M4 Layer D D6, detection-only)")
+      @log.call("server: exp authority = #{@config.battle_enforce_exp} (M4 Layer D D6; on = up-only restore to high-water)")
       if @config.battle_enforce_rewards != :off && @config.battle_enforce_encounters != :on
         @log.call("server: WARNING reward detection is on but encounter enforcement is #{@config.battle_enforce_encounters} — no foe context, so battle windows can't open")
       end
@@ -358,25 +359,59 @@ module PEMK
       reward_check_levels(conn, account_id, mons) if @reward_audit
       @mailbox.submit(account_id) do
         status = @monsters.apply_party(account_id, mons, seq)
-        observe_exp(account_id, mons)   # D6: per-mon EXP high-water + rollback detection
-        @reactor.post { reply(conn, type: :mon_ack, seq: seq, flagged: status[1].any?) }
+        corr = observe_exp(account_id, mons)   # D6: EXP high-water + rollback; :on -> up-only restore plan
+        ack = { type: :mon_ack, seq: seq, flagged: status[1].any? }
+        # D6 part 2: the plan rides the existing ack (absent in off/shadow). :level is
+        # server-internal — strip it from the wire.
+        ack[:exp_correct] = corr.map { |c| { uid: c[:uid], exp: c[:exp] } } if corr
+        @reactor.post do
+          if corr
+            # Exempt the restore's own level jump from the D4 reward audit (the next
+            # projection reports the restored level with NO battle window open — without
+            # this the server would SUSPECT-flag its own correction). Reactor-thread
+            # write, consumed one-shot by reward_check_levels (also reactor-thread).
+            allowed = (conn.data[:exp_restored] ||= {})
+            corr.each { |c| allowed[c[:uid]] = c[:level] if c[:level].is_a?(Integer) }
+          end
+          reply(conn, **ack)   # reply takes keywords (Ruby 3: no implicit hash splat)
+        end
       end
     end
 
-    # D6 part 1 (in the mailbox): track each owned mon's EXP high-water and flag a rollback
-    # (reported EXP below it = old save / edit). Detection-only; feeds the D5 review queue.
+    # D6 (in the mailbox): track each owned mon's EXP high-water and flag a rollback
+    # (reported EXP below it = old save / edit); feeds the D5 review queue.
+    # -> part 2: in :on, returns the UP-ONLY restore plan [{uid:, exp: high_water}] for the
+    # ack (nil when clean); re-emitted every below-frame (client's up-only guard makes a
+    # re-send a no-op; the applied restore re-projects AT the high-water and the plan goes
+    # empty). In :shadow the plan is LOGGED once per rollback episode (gated on the same
+    # observe() latch — corrections() alone has no latch and would spam every frame).
     def observe_exp(account_id, mons)
-      return unless @monster_stats && mons.is_a?(Array)
+      return nil unless @monster_stats && mons.is_a?(Array)
 
-      entries = mons.map { |m| { uid: m[:uid], exp: m[:exp], level: m[:level] } if m.is_a?(Hash) }.compact
+      entries = mons.map { |m| { uid: m[:uid], exp: m[:exp], level: m[:level], species: m[:species] } if m.is_a?(Hash) }.compact
       rollbacks = @monster_stats.observe(account_id, entries)
-      return if rollbacks.empty?
-
-      brief = rollbacks.map { |r| "uid#{r[:uid]} #{r[:from]}->#{r[:to]}" }.join(", ")
-      @log.call("exp: account #{account_id} SUSPECT rollback #{brief} (reported EXP below high-water)")
-      flag_anomaly(account_id, :exp_rollback)
+      unless rollbacks.empty?
+        brief = rollbacks.map { |r| "uid#{r[:uid]} #{r[:from]}->#{r[:to]}" }.join(", ")
+        @log.call("exp: account #{account_id} SUSPECT rollback #{brief} (reported EXP below high-water)")
+        flag_anomaly(account_id, :exp_rollback)
+      end
+      case @config.battle_enforce_exp
+      when :on
+        corr = @monster_stats.corrections(account_id, entries)
+        corr.empty? ? nil : corr
+      when :shadow
+        unless rollbacks.empty?
+          plan = @monster_stats.corrections(account_id, entries)
+          unless plan.empty?
+            brief = plan.map { |c| "uid#{c[:uid]}->#{c[:exp]}" }.join(", ")
+            @log.call("exp: account #{account_id} would restore #{brief} (shadow)")
+          end
+        end
+        nil
+      end
     rescue StandardError => e
       @log.call("exp: observe failed #{e.class}: #{e.message}")
+      nil
     end
 
     # M4 Layer D D4: the client reports a wild battle's end (outcome + the foes it
@@ -413,6 +448,7 @@ module PEMK
       return unless mons.is_a?(Array)
 
       prev = conn.data[:party_levels] || {}
+      restored = conn.data[:exp_restored]   # D6 part 2: uids whose next jump is the server's own restore
       cur  = {}
       changes = []
       mons.each do |m|
@@ -423,7 +459,16 @@ module PEMK
 
         cur[uid] = [sp, lvl] if uid
         old = uid && prev[uid]
-        changes << [sp, old[1], lvl] if old && old[0] == sp && lvl > old[1]
+        next unless old && old[0] == sp && lvl > old[1]
+
+        # One-shot exemption: the D6 restore raises this uid's level with no battle
+        # window — that jump is server-authored, not a reward claim. Exempt it only up
+        # to the level the high-water recorded; anything beyond is judged normally.
+        if restored && restored.key?(uid)
+          allowed = restored.delete(uid)
+          next if lvl <= allowed
+        end
+        changes << [sp, old[1], lvl]
       end
       conn.data[:party_levels] = cur
 
@@ -827,7 +872,8 @@ module PEMK
         battle_enforce_teams: @config.battle_enforce_teams.to_s,   # M4 Layer D D1 team-legality mode
         battle_enforce_encounters: @config.battle_enforce_encounters.to_s,   # M4 Layer D D2 encounter mode
         battle_enforce_catches: @config.battle_enforce_catches.to_s,         # M4 Layer D D3 catch mode
-        battle_enforce_rewards: @config.battle_enforce_rewards.to_s }        # M4 Layer D D4 reward mode
+        battle_enforce_rewards: @config.battle_enforce_rewards.to_s,         # M4 Layer D D4 reward mode
+        battle_enforce_exp: @config.battle_enforce_exp.to_s }                # M4 Layer D D6 EXP mode
     end
 
     # Zone-scoped presence: track each player's current map and fan a position

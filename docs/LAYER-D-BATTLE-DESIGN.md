@@ -99,6 +99,31 @@
 > default off. Part 2 (`on`: reconcile the client party to the server high-water at login) is
 > the risky save-migration and remains ahead.
 
+> **Progress (2026-07-25): D6 part 2 shipped (`on` = up-only EXP restore to the high-water).**
+> Design chosen via a 4-stance judged panel; owner picked **high-water give-back**: the party
+> stays blob-shaped (the server cannot rewrite it), so `on` is a server DIRECTIVE — the
+> `:mon_ack` carries `:exp_correct` `[{uid, exp}]` for party mons below their high-water, and
+> the client's new `ExpCorrect` module (PosCorrect's template) raises each to the target on a
+> safe overworld frame — **never lowers** — then re-projects + checkpoints (self-terminating;
+> re-sends are no-ops). The crash race is the feature: earned-but-lost EXP comes back. No new
+> frames, no migration; `shadow` logs the would-restore plan once per rollback episode.
+> Adversarial review (5 lenses, refutation-verified) caught a real HIGH: **Shadow Pokémon's
+> `exp=` override diverts the write into `@saved_exp`** — an unguarded apply would loop
+> forever, inflate the purification payout to level 100, and corrupt a legit save. Guards
+> shipped: shadow mons skipped; the write is verified (any fan-plugin `exp=` override skips
+> for the session instead of looping); the target is clamped to the mon's growth-curve max
+> (server clamps the STORED high-water per-species too — a hacked projection can't be
+> memorized then re-imposed); held 1 EXP short of the cap when the species can still evolve
+> (Gen<=7 level-up-evo trap); fainted mons stay fainted; `safe?` also excludes running
+> events/message boxes; and the restore's own level jump is **exempted one-shot from the D4
+> reward audit** (it would otherwise SUSPECT-flag the server's own correction). Honest
+> limits: the restore is silent (no UI event); an egg or species-clamped mon below its
+> high-water re-emits as a bounded no-op until it grows past it; D5 `exp_rollback` flags
+> still accrue in `on` (the episode self-heals but stays visible to the operator); a hostile
+> server can raise (never lower) EXP up to the species cap. **Operator note: level-jump
+> judging (D4/D6 exemption paths) needs growth CURVES in battle_data.json — re-run the F9
+> "PEMK: Export Battle Data" if your export predates D4.**
+
 This document answers the last open question in the anti-cheat ladder: **how does
 the server independently decide what a battle produced — the Pokémon that
 appears, the one you catch, the EXP/money/drops you earn, and who wins a ranked
