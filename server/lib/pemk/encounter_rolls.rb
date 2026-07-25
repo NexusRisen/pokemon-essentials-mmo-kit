@@ -82,9 +82,12 @@ module PEMK
     # retry would otherwise mislabel "client" AND strand a claimable wild_caught roll.
     # species+pid is already 2^-32-selective per account.
     def claim(account_id, species, pid, now: Time.now)
+      # FOR UPDATE: serialize against a concurrent D8 condemn on the SAME roll (both
+      # lock the row) so a catch can never claim-then-birth-active in the gap where a
+      # sweep is poisoning its roll. Runs inside mint_batch's transaction.
       row = @db[:encounter_rolls]
             .where(account_id: account_id, species: species.to_s, pid: pid, claimed_at: nil)
-            .order(Sequel.lit("caught_at IS NULL"), :id).limit(1).first
+            .order(Sequel.lit("caught_at IS NULL"), :id).limit(1).for_update.first
       return nil unless row
 
       @db[:encounter_rolls].where(id: row[:id]).update(claimed_at: now)

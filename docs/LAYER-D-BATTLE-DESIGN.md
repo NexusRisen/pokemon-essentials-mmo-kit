@@ -124,6 +124,47 @@
 > judging (D4/D6 exemption paths) needs growth CURVES in battle_data.json — re-run the F9
 > "PEMK: Export Battle Data" if your export predates D4.**
 
+> **Progress (2026-07-25): D8 shipped (per-battle re-sim ENFORCEMENT — quarantine-first).**
+> The D7 corpus now has teeth, under its OWN flag `PEMK_BATTLE_ENFORCE_RESIM` off/shadow/on
+> (an operator's `rng=on` never silently becomes rejection). Model: **provisional-until-
+> verified, walk-tier bite**. A seeded catch is born `verify_state='provisional'` (migration
+> 013, additive); the ingest-time SEED WALK is the ONLY tier that can condemn (it's
+> cryptographic — value-by-value seed refutation, engine-drift-independent), and the harness
+> replay verdict only CERTIFIES (`match`→`verified`, the D9 ranked asset) or withholds — it
+> never auto-condemns (drift-prone). A `walk_mismatch` poisons its encounter roll
+> (`condemned_at`) and quarantines the caught mon after `PEMK_RESIM_MIN_STRIKES` (default 2)
+> distinct refuted battles, gated by an FP-STORM breaker (≥3 accounts adverse in one
+> `engine_fp` cohort → suppress, re-adjudicate later). Quarantine rides `monsters.status`
+> ONLY (the M3.2 trade CAS already blocks it — zero trade-code change) + a provisional
+> **trade hold** released the moment the walk clears (seconds), 60-min fail-open TTL so a
+> dead harness never bricks trading. **Nothing is ever destroyed; EXP/money untouched; the
+> `flagged` bit is not overloaded.** The `ResimVerdicts` sweep runs on the live server
+> (single-writer — the harness never touches monsters), idempotent + fully audited
+> (`enforcement_events`). Operator console `bin/pemk_quarantine.rb` (list/show/pardon/
+> reports); **pardon is a one-command FULL reversal** (active + verified + un-poison roll +
+> mark evidence `pardoned` so strikes don't re-arm). Ramp: `bin/pemk_replay.rb` daemon
+> (`PEMK_REPLAY_LOOP`), evasion covered by D5 `rng_silent` + `resim_claim_evasion` sweeps.
+> **Adversarial review (5 lenses, 13 confirmed, all fixed):** shadow no longer burns the
+> on-mode idempotency slot; storm-suppressed records stay actionable (no permanent
+> forgiveness); a NULL-unsafe `!= 'pardoned'` that silently disabled all quarantine; NULL
+> `caught_at` trade-held forever; verify consuming an un-minted catch; condemn made
+> transactional + `FOR UPDATE`-serialized against the mint claim. 369 tests green.
+> **Honest limits (documented, not bugs):** (1) an HONEST-seed battle with a LIED outcome
+> (real draws, fabricated init/result) passes the walk and is never condemned — only the
+> harness replay `mismatch` catches it, and that WITHHOLDS `verified` (D9-ineligible) rather
+> than quarantining; exact-EXP/outcome enforcement is out of scope. (2) `MIN_STRIKES=2`
+> gives the first proven-fabricated catch a pass (drift tolerance; tune to 1 for a harsher
+> server). (3) The FP-storm breaker can't fire on a 1-2-player server — mitigated by
+> **shadow-first** (would_quarantine audits surface a fleet-wide bug before any state change)
+> + full pardon; walk_mismatch is cryptographic so an honest player produces zero of them
+> unless our vendored PCG32 skews (guarded by the byte-identity test). (4) `engine_fp` is
+> client-reported/inventory-level; a cheat ring sharing it can DELAY (not permanently evade)
+> condemnation to human review — server-attested build tokens are a v-next hardening. (5) A
+> mon traded out during the fail-open window and later condemned quarantines the innocent
+> holder; routing that to review instead is a v-next. **D8 done; next: D9 ranked PvP** (the
+> north star — commit-reveal seeds, battle_sessions from the trade rendezvous, Glicko-2,
+> reading `verify_state` for eligibility).
+
 > **Progress (2026-07-25): D7 part 1 shipped (the engine tier's deterministic seam).**
 > **STEP-0 GATE PASSED:** the unmodified v21.1 battle engine runs HEADLESS on plain MRI —
 > real 3v3 AI-vs-AI battles to decision in ~30 ms, and same-seed runs in separate processes

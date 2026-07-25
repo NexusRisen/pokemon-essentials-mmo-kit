@@ -116,11 +116,16 @@ module PEMK
 
     def condemn(account_id, rec, counts, now)
       roll_id = rec[:encounter_roll_id]
-      uid     = roll_uid(roll_id)
       if @mode == :on
         # poison + quarantine + audit + stamp in ONE transaction: a crash mid-condemn
-        # rolls the record back to actionable, so re-run is exactly-once.
+        # rolls the record back to actionable, so re-run is exactly-once. LOCK the roll
+        # FOR UPDATE and read its uid link INSIDE the txn so a concurrent mint claim
+        # (which also locks the row) can't slip a catch through as active — it either
+        # commits first (we see its uid -> quarantine the mon) or waits and then births
+        # the mon quarantined off our condemned_at.
         @db.transaction do
+          @db[:encounter_rolls].where(id: roll_id).for_update.first if roll_id
+          uid = roll_uid(roll_id)
           @db[:encounter_rolls].where(id: roll_id).update(condemned_at: now) if roll_id   # poison unclaimed catch
           @db[:monsters].where(id: uid, status: "active").update(
             status: "quarantined", quarantined_at: now,
@@ -131,7 +136,7 @@ module PEMK
         end
         counts[:quarantined] += 1
       else
-        audit(account_id, "would_quarantine", uid, rec[:id], "walk_mismatch, strikes>=#{@strikes} (shadow)", now)
+        audit(account_id, "would_quarantine", roll_uid(roll_id), rec[:id], "walk_mismatch, strikes>=#{@strikes} (shadow)", now)
         stamp(rec[:id], "would_quarantine", now)
         counts[:would] += 1
       end
