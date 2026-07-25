@@ -167,6 +167,36 @@
 > Next: **D7 part 2** — the MRI headless harness (from the spike skeleton) + replay of
 > corpus records; then part 3 (parity measurement at scale).
 
+> **Progress (2026-07-25): D7 part 2 shipped (the headless replay harness) — REAL battles
+> re-simulated at 100% parity.** `server/harness/` productionizes the spike: hardened stubs
+> (`PBDebug.logonerr` TRANSPARENT — an engine exception fails the replay, closing the step-0
+> trap; deterministic fake clock; fixed noon time), a 114-file proven engine load (real
+> `ItemHandlers` + in-battle item procs — balls are engine code, not stubs; ShadowPokemon's
+> `Battle::Battler` reopen; Metadata/Pokedex for the Player path) and a boot tripwire that
+> refuses to load inside the live server process. `replay.rb` re-simulates a captured record:
+> parties rebuilt from init frames, BOTH sides' choices re-registered per round (vanilla
+> playback pattern), draws derived from the seed's PCG32 streams (`on`) or value-replayed
+> with bound verification (shadow), `pbRun` events re-executed (the "Use next Pokémon?"→No
+> confirm answered from the pending event — via `pbDisplayConfirmMessage`, the method the
+> engine actually calls), mega state restored, D3 catch verdicts injected ONLY on the final
+> recorded round of a caught record, Struggle rounds auto-chosen. The verdict digests at the
+> SAME seam as the recorder (`pbEndOfBattle` entry) and requires decision + turn count +
+> per-mon HP/status/EXP + FULL record consumption (an early-ending divergent replay can
+> never silently MATCH). Truncated/desynced records short-circuit to `not_replayable`.
+> `bin/pemk_replay.rb` batches `pending`/`walk_ok`/`walk_skipped` records and stamps the
+> verdict; triage statuses (`walk_mismatch`/`no_log`/`mode_mismatch`) are never overwritten
+> without `REPLAY_FORCE`. **Validated: 5/5 real in-game battles (4 wins + a Sleep-Powder →
+> Master-Ball catch) replay to MATCH under the hardened comparator; two of them are frozen
+> as regression fixtures the suite replays on every run.** The corpus lifecycle is live:
+> `pending → walk_ok → match`. Adversarial review: 25 confirmed findings fixed (the big
+> three: catch verdict blessed EVERY throw; turns/consumption never compared; the confirm
+> override was dead code). Honest limits: verdict granularity is end-state (PP burned /
+> items consumed mid-battle are not compared — part 3 can tighten); `$bag` is empty (Exp
+> All-class items uncaptured — a bench-EXP mismatch will surface them); replay needs the
+> game repo's Data/ (server-only deployments skip the harness test). Next: **D7 part 3** —
+> parity at scale (batch stats, corpus retention/pruning, the granted-but-recordless sweep)
+> — then the D8 decision.
+
 This document answers the last open question in the anti-cheat ladder: **how does
 the server independently decide what a battle produced — the Pokémon that
 appears, the one you catch, the EXP/money/drops you earn, and who wins a ranked
