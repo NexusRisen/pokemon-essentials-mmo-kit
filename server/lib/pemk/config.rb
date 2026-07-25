@@ -9,7 +9,8 @@ module PEMK
     attr_reader :bind, :port, :database_url, :economy_caps, :badges_max, :inventory_caps,
                 :monster_caps, :world_path, :position_enforcement, :pickup_enforce,
                 :pickup_reset_allowed, :battle_data_path, :battle_enforce_teams,
-                :battle_enforce_encounters, :battle_enforce_catches, :battle_enforce_rewards
+                :battle_enforce_encounters, :battle_enforce_catches, :battle_enforce_rewards,
+                :anomaly_detection
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -77,6 +78,14 @@ module PEMK
       # off. Needs encounters=on for foe context (else it can't open windows).
       rmode = env.fetch("PEMK_BATTLE_ENFORCE_REWARDS", "off").to_s.strip.downcase
       @battle_enforce_rewards = %w[off shadow on].include?(rmode) ? rmode.to_sym : :off
+
+      # M4 Layer D D5: statistical anomaly detection (cross-battle backstop). Binary — it
+      # never enforces, it only accumulates per-account SUSPECT counters + a provenance
+      # mix into a human review queue. Default off. NOTE it has no signal on its own: its
+      # inputs come from the OTHER layers, so provenance needs encounters=on and the flag
+      # counters need their source checks active (rewards!=off, encounters!=off). D5 alone
+      # (everything else off) is inert.
+      @anomaly_detection = env.fetch("PEMK_ANOMALY_DETECTION", "off").to_s.strip.downcase == "on"
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {
