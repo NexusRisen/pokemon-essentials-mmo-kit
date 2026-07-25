@@ -40,7 +40,7 @@ module PEMK
     end
 
     # Persist a D2 mint (String-keyed hash from EncounterMint#roll). -> row id.
-    def record(account_id, mint, map, enctype, now: Time.now)
+    def record(account_id, mint, map, enctype, seed: nil, now: Time.now)
       @db[:encounter_rolls].insert(
         account_id: account_id,
         species:    mint["species"].to_s,
@@ -50,6 +50,7 @@ module PEMK
         shiny:      mint["shiny"] == true,
         map:        map,
         enctype:    enctype.to_s,
+        battle_seed: seed,   # D7: the 63-bit PCG32 seed born with this mint (nil = rng off)
         created_at: now
       )
     end

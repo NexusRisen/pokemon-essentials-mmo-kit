@@ -101,8 +101,12 @@ module PEMK
       @log.call("server: reward enforcement = #{@config.battle_enforce_rewards} (M4 Layer D D4, detection-only)")
       @log.call("server: anomaly detection = #{@config.anomaly_detection ? 'on' : 'off'} (M4 Layer D D5, review-queue only)")
       @log.call("server: exp authority = #{@config.battle_enforce_exp} (M4 Layer D D6; on = up-only restore to high-water)")
+      @log.call("server: battle rng = #{@config.battle_enforce_rng} (M4 Layer D D7 part 1 — instrumentation, never rejects)")
       if @config.battle_enforce_rewards != :off && @config.battle_enforce_encounters != :on
         @log.call("server: WARNING reward detection is on but encounter enforcement is #{@config.battle_enforce_encounters} — no foe context, so battle windows can't open")
+      end
+      if @config.battle_enforce_rng != :off && @config.battle_enforce_encounters != :on
+        @log.call("server: WARNING battle rng is #{@config.battle_enforce_rng} but encounter enforcement is #{@config.battle_enforce_encounters} — seeds ride the mint, so no battle can be seeded")
       end
       begin
         pruned = @encounter_rolls.prune
@@ -648,12 +652,18 @@ module PEMK
       stash << mint
       stash.shift while stash.length > 2
 
+      # D7 part 1: a 63-bit PCG32 battle seed is born WITH the mint when the rng seam is
+      # active (63-bit: Postgres bigint is signed). In `on` the client draws the battle's
+      # RNG from it; in `shadow` it is only the record<->roll correlation token. Old
+      # clients ignore the extra grant key.
+      seed = (SecureRandom.random_number(1 << 63) if @config.battle_enforce_rng != :off)
+
       # D3.2: persist the mint (durable claim-check for the caught mon's UID provenance).
       # Background on the per-account mailbox — the grant reply stays inline, and mailbox
       # FIFO guarantees this insert lands before any later catch/uid frame's DB work.
       @mailbox.submit(account_id) do
         begin
-          @encounter_rolls.record(account_id, mint, map, enctype)
+          @encounter_rolls.record(account_id, mint, map, enctype, seed: seed)
         rescue StandardError => e
           @log.call("encounter: roll persist failed #{e.class}: #{e.message}")
         end
@@ -661,9 +671,11 @@ module PEMK
 
       @log.call("encounter: account #{account_id} MINT map #{map} #{enctype} -> " \
                 "#{mint['species']}@#{mint['level']}#{mint['shiny'] ? ' /SHINY' : ''}")
-      reply(conn, type: :encounter_grant, seq: seq,
-            species: mint["species"], level: mint["level"],
-            pid: mint["pid"], iv: mint["iv"], shiny: mint["shiny"])
+      grant = { type: :encounter_grant, seq: seq,
+                species: mint["species"], level: mint["level"],
+                pid: mint["pid"], iv: mint["iv"], shiny: mint["shiny"] }
+      grant[:battle_seed] = seed if seed
+      reply(conn, **grant)
     end
 
     # M4 Layer D D3 (on): server-adjudicated Poké Ball capture. The client asks for a
@@ -873,7 +885,8 @@ module PEMK
         battle_enforce_encounters: @config.battle_enforce_encounters.to_s,   # M4 Layer D D2 encounter mode
         battle_enforce_catches: @config.battle_enforce_catches.to_s,         # M4 Layer D D3 catch mode
         battle_enforce_rewards: @config.battle_enforce_rewards.to_s,         # M4 Layer D D4 reward mode
-        battle_enforce_exp: @config.battle_enforce_exp.to_s }                # M4 Layer D D6 EXP mode
+        battle_enforce_exp: @config.battle_enforce_exp.to_s,                 # M4 Layer D D6 EXP mode
+        battle_enforce_rng: @config.battle_enforce_rng.to_s }                # M4 Layer D D7 rng/capture mode
     end
 
     # Zone-scoped presence: track each player's current map and fan a position
