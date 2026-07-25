@@ -15,6 +15,10 @@ module PEMK
   # single-threaded and lock-free.
   class Reactor
     OUTBUF_CAP = 4 << 20
+    MAX_CONNS        = 2000   # far above the 500-CCU target; bounds fd/memory exhaustion
+    IDLE_SWEEP_SEC   = 15.0   # how often the idle/pre-auth sweep runs
+    PREAUTH_DEADLINE = 30.0   # seconds a socket may sit unauthenticated
+    IDLE_TIMEOUT     = 300.0  # seconds an authed socket may go silent (client heartbeats ~0.5-30s)
     READ_CHUNK = 64 * 1024
     LEN_BYTES  = 4
     MAX_FRAME  = PEMK::Wire::MAX_MESSAGE_BYTES
@@ -105,6 +109,11 @@ module PEMK
         end
       end
       writable&.each { |io| write_conn(@conns[io]) }
+      now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      if now - (@last_idle_sweep || 0.0) >= IDLE_SWEEP_SEC
+        @last_idle_sweep = now
+        sweep_idle(now)
+      end
       @on_tick&.call   # reactor-thread; keep it O(1)/coarse (it runs up to ~2x/s)
     end
 
@@ -165,8 +174,35 @@ module PEMK
         break if io == :wait_readable || io.nil?
 
         addr = (io.peeraddr[3] rescue "?")
-        @conns[io] = Conn.new(io, addr)
+        # Hard ceiling: without it, an attacker opens sockets until the process runs
+        # out of file descriptors or memory, and every accepted socket costs buffers
+        # before it ever authenticates (audit). Well above the 500-CCU target.
+        if @conns.size >= MAX_CONNS
+          @log.call("reactor: connection cap #{MAX_CONNS} reached -> refusing #{addr}")
+          (io.close rescue nil)
+          next
+        end
+        conn = Conn.new(io, addr)
+        conn.data[:opened_at] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        @conns[io] = conn
         @log.call("reactor: + #{addr} (#{@conns.size})")
+      end
+    end
+
+    # Close sockets that connected but never authenticated (slowloris / scanner), and
+    # authenticated ones that have gone silent far past any client heartbeat. Runs on
+    # the reactor thread from the existing tick — O(conns), no DB.
+    def sweep_idle(now)
+      @conns.values.each do |conn|
+        next if conn.closing
+
+        opened = conn.data[:opened_at] || now
+        if conn.data[:account_id].nil?
+          conn.closing = true if (now - opened) > PREAUTH_DEADLINE
+        elsif (now - (conn.data[:last_seen] || opened)) > IDLE_TIMEOUT
+          conn.closing = true
+        end
+        close_conn(conn) if conn.closing && conn.outbuf.empty?
       end
     end
 

@@ -17,11 +17,22 @@ module PEMK
       @boxes = {}               # account_id => { queue: [job,...], busy: bool }
     end
 
+    # Depth ceiling per account. The per-connection frame budget already bounds the
+    # inflow; this is the backstop that stops a queue from retaining megabytes of frame
+    # bodies (a :save job closes over its whole blob) if a worker stalls (audit).
+    MAX_QUEUE = 64
+
     # Enqueue a job (a no-arg proc, runs on a worker) for +account_id+. Reactor thread.
+    # -> true if queued, false if dropped (the caller may nack).
     def submit(account_id, &job)
       box = (@boxes[account_id] ||= { queue: [], busy: false })
+      if box[:queue].length >= MAX_QUEUE
+        @log.call("mailbox: account #{account_id} queue full (#{MAX_QUEUE}) -> dropping job")
+        return false
+      end
       box[:queue] << job
       dispatch(account_id, box)
+      true
     end
 
     def size

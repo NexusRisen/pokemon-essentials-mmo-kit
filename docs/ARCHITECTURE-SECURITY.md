@@ -32,25 +32,47 @@ is Milestone 4.
 | Capability | Computed by | Server-verified? | If a cheat client lies… |
 |---|---|---|---|
 | **Login / identity** | server | ✅ yes | can't — bcrypt + opaque session token, no client-claimed id |
-| **Money / coins / BP / soot** | server ledger | ✅ yes | rejected — append-only ledger, capped |
-| **Badges** | server | ✅ yes | rejected — server owns the bitmask |
+| **Money / coins / BP / soot** | client → **server ledger** | ⚠️ capped + audited, not authored | the VALUE is client-pushed; the ledger caps it, makes it append-only and idempotent, and M4-D4 bounds battle gains — but an in-cap lie is persisted |
+| **Badges** | client → **server ledger** | ⚠️ capped, not authored | the client computes the bitmask and pushes it on the `:econ` channel; the server enforces the cap, not the earning |
 | **Bag contents** | server snapshot | ✅ shape/caps only | can't hold impossible amounts, but see below |
 | **Pokémon identity & ownership** | server (UIDs) | ✅ yes | can't dupe — UID registry + ownership |
 | **Trades** | server | ✅ yes | can't dupe/steal — atomic CAS swap, rollback |
 | **Where a Pokémon came from (pickup, gift, catch)** | **client** | ❌ no | can fabricate acquiring one (within UID rules) |
 | **Overworld movement / position** | client → **server-audited** | ✅ enforceable (M4-B) | no-clip / illegal-warp snapped back to last-good tile (opt-in flag; audit-only by default) |
 | **Item pickup (distance, existence)** | client → **server-granted** | ✅ enforceable (M4-C) | remote / duplicate pickups denied — distance gate + one-shot + server grant (opt-in flag) |
-| **Interacting with NPCs / objects** | **client** | ❌ no | can trigger events from anywhere |
-| **Wild encounters / which Pokémon appears** | **client** | ❌ no | can force encounters / shinies / species |
-| **Catching** | **client** | ❌ no | can claim a catch that never happened |
-| **Battle outcomes (vs NPC)** | **client** | ❌ no | can declare any result, EXP, drops |
-| **PvP battle** | both clients (relayed) | ⚠️ deterministic, not authoritative | a modified client can desync/cheat its own side |
+| **Interacting with NPCs / objects** | client → **server-audited** | ⚠️ partial (M4-C) | item balls are distance-gated + one-shot; NPC **gift** events are not gated (a rewound self-switch re-farms them) |
+| **Wild encounters / which Pokémon appears** | **server** | ✅ enforceable (M4-D2, `PEMK_BATTLE_ENFORCE_ENCOUNTERS=on`) | the server mints species/level/PID/IVs/shiny; the client builds what it is given |
+| **Catching** | **server** | ✅ enforceable (M4-D3, `PEMK_BATTLE_ENFORCE_CATCHES=on`) | the server runs the capture formula and rolls the shakes with SecureRandom, clamping every client input |
+| **Battle rewards (vs NPC)** | client → **server-bounded** | ✅ detection (M4-D4, `PEMK_BATTLE_ENFORCE_REWARDS`) | EXP/money beyond the closed-form envelope is flagged to the review queue |
+| **Battle RNG + outcome (vs NPC)** | **server-seeded, re-simulated** | ✅ enforceable (M4-D7/D8, `PEMK_BATTLE_ENFORCE_RNG` + `PEMK_BATTLE_ENFORCE_RESIM`) | rolls derive from a server seed and are refuted value-by-value at ingest; the battle is re-simulated headless, and a refuted catch is quarantined |
+| **Per-mon EXP** | client → **server high-water** | ✅ detection + up-only restore (M4-D6) | a rollback is detected and the mon is restored UP to the server's high-water; EXP is never lowered |
+| **Team / set legality** | client → **server-audited** | ✅ detection (M4-D1) | illegal moves/abilities/natures/EVs are flagged (the team block itself is still client-reported — see limits) |
+| **PvP battle** | both clients (relayed) | ⚠️ deterministic, not authoritative | a modified client can desync/cheat its own side — D9 (ranked) is the remaining milestone |
 | **Spawn / respawn position** | **server** | ✅ enforceable (M4-B) | server seeds spawn from the persisted last-good position |
 | **Map transfers / warps** | client → **server-audited** | ✅ enforceable (M4-B) | illegal (non-endpoint) warps snapped back (opt-in flag) |
 
-Read the ✅ rows as: *a hacked client cannot gain here.* Read the ❌ rows as:
-*today this is a trusted-players model — a hacked client can lie and the server
-won't catch it.*
+Read the ✅ rows as: *a hacked client cannot gain here* — **but note the flag**: every
+Layer B/C/D protection is **opt-in and OFF by default**. A server running the stock
+config is a trusted-players model no matter what this matrix says. See
+`docs/GETTING-STARTED.md` for the ramp (each flag goes `off → shadow → on`).
+
+> ⚠️ **Sections below this matrix are older than the matrix.** They were written before
+> M4 Layer D shipped and still describe encounters/catches/battles as unprotected. The
+> matrix above is the current truth; the narrative below is kept for the threat-model
+> reasoning, not for its status claims.
+
+### What the server still does NOT own (audit, 2026-07-25)
+
+The honest counterweight to the ✅ column — these are the real remaining gaps:
+
+| Surface | Status | Consequence |
+|---|---|---|
+| `$game_variables` / `$game_switches` / `$game_self_switches` | **client-only** — no table, no channel | quest/story state is fully client-authored; rewinding a self-switch re-farms every NPC gift, TM, HM and key item, with **no detection** |
+| Per-mon stat block (IVs/EVs/moves/ability/nature) | **client-only** | no server row contradicts a counterfeit; this is why ranked PvP (D9) needs it first |
+| PC boxes, Pokédex, roamers, daycare, PC item store | **client-only** | not projected at all — "park it in a box" evades the party shadow |
+| Party composition | **server-shadowed** | detection-only; the save blob remains authoritative |
+| Money / badges | **server-persisted, client-authored** | capped and audited, not earned server-side |
+| Overworld position | **enforceable, but** | the no-clip verdict is suppressed whenever the CLIENT declares `:surf`/`:dive` |
 
 ### The precise list of currently **unsecured** interactions
 

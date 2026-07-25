@@ -109,20 +109,23 @@ class MonstersTest < Minitest::Test
     assert_equal 3, @mon.mon_seq(@acct)
   end
 
-  def test_foreign_uid_flags_projection_and_monster_row
+  # A foreign-uid sighting is evidence about the PROJECTOR, never about the victim.
+  # Writing it onto the victim's row let any account permanently bar any (enumerable)
+  # uid from trading, with no recovery — the audit's cross-account grief primitive.
+  def test_foreign_uid_flags_the_projector_and_never_touches_the_victims_row
     _, grants = @mon.mint_batch(@other, [entry(500)])   # minted by the OTHER account
     stolen = grants[0][:uid]
     status, flags = @mon.apply_party(@acct, [proj(stolen)], 1)
     assert_equal :ack, status                            # flag, never reject
     assert_includes flags, "foreign_uid"
+
     snap = @db[:party_snapshots].where(account_id: @acct).first
-    assert_equal true, snap[:flagged]                    # adopted even when flagged
+    assert_equal true, snap[:flagged]                    # the PROJECTOR carries the evidence
+    assert_includes snap[:flags].to_a, "foreign_uid"
+
     mon = @db[:monsters].where(id: stolen).first
-    assert_equal true, mon[:flagged]
-    sightings = mon[:flags].to_a
-    assert_equal 1, sightings.size
-    assert_equal @acct, sightings[0]["seen_by"]
-    assert_equal "foreign_uid", sightings[0]["kind"]
+    assert_equal false, mon[:flagged], "the victim's mon must stay tradeable"
+    assert_empty mon[:flags].to_a, "no cross-account write at all"
   end
 
   def test_dup_in_party_and_unknown_uid_flagged

@@ -49,6 +49,7 @@ module PEMK
       (PEMK::Reward.reset rescue nil)     # ... and the advertised reward mode (M4-D4)
       (PEMK::ExpCorrect.reset rescue nil) # ... and any pending EXP restore + mode (M4-D6)
       (PEMK::BattleRng.reset rescue nil)  # ... and any pending battle seed + mode (M4-D7)
+      (PEMK::Challenge.clear_partner rescue nil)  # ... and the peer consent gate (a new socket agreed to nothing)
       @seq = Hash.new(0)
       @dirty_since = nil
       @last_change = nil

@@ -52,6 +52,12 @@ module PEMK
     # --- inbound: routed from Dispatch (runs inside the per-frame pump) ----------
     def self.on_message(msg)
       return unless msg[:to] == PEMK.self_id
+      # Only our agreed opponent may drive this battle: any third party could
+      # otherwise inject rounds/choices/an end into a live match (audit).
+      unless (PEMK::Challenge.agreed_with?(msg[:from]) rescue false)
+        PEMK.log("battlenet: frame from non-partner #{msg[:from].inspect} -> ignored")
+        return
+      end
       case msg[:type]
       when :battle_start  then @inbox_start = msg
       when :battle_choice then @inbox_choice[[msg[:round], msg[:idxBattler]]] = msg[:cmd]

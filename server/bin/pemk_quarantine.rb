@@ -76,6 +76,23 @@ when "pardon"
   end
   puts "pardoned uid #{uid} (#{m[:species]}, acct #{m[:owner_account_id]}) — now active + verified. reason: #{reason}"
 
+when "unflag"
+  # REPAIR for the pre-audit cross-account grief: any account could set flagged=true on
+  # ANY monster by projecting its uid, and Trades#cas gates on flagged=false — so a
+  # stranger's Pokémon became permanently untradeable with no recovery path. The write
+  # is gone (monsters.rb records the sighting against the projector now), but rows
+  # flagged before the fix still need clearing. `unflag all` repairs the whole registry.
+  target = ARGV.shift.to_s
+  ds = target == "all" ? db[:monsters].where(flagged: true) : db[:monsters].where(id: target.to_i, flagged: true)
+  rows = ds.select_map(%i[id owner_account_id])
+  if rows.empty?
+    puts target == "all" ? "no flagged mons" : "uid #{target} is not flagged"
+  else
+    ds.update(flagged: false, updated_at: Time.now)
+    rows.each { |(uid, acct)| audit(db, acct, "unflag", uid, "operator cleared foreign-uid sighting flag") }
+    puts "unflagged #{rows.length} mon(s) — tradeable again"
+  end
+
 when "reports"
   rows = db[:anomaly_reports].where(reviewed_at: nil).order(Sequel.desc(:updated_at)).limit(100).all
   puts "#{rows.length} open review report(s):"
@@ -89,6 +106,7 @@ else
       list [account_id]        quarantined mons (optionally one account)
       show <uid>               full evidence + audit trail for a mon
       pardon <uid> [reason]    un-quarantine (one UPDATE; reversal is the design's spine)
+      unflag <uid>|all         clear the legacy foreign-uid flag that blocked trading
       reports                  open D5/D8 review queue
   USAGE
   exit 1

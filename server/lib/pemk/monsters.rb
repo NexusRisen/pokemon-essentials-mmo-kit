@@ -224,14 +224,15 @@ module PEMK
           flags << "unknown_uid"
           @log.call("mon: account #{account_id} projected unknown uid #{uid}")
         elsif owner != account_id
+          # A foreign-uid sighting is evidence about the PROJECTING account, never about
+          # the victim's Pokémon. This used to write flagged=true on the OTHER account's
+          # registry row — and Trades#cas gates on flagged=false, so any player could
+          # permanently bar any (enumerable, bigserial) uid in the game from ever being
+          # traded, with no unflag path anywhere (audit HIGH). The sighting now lands in
+          # the projector's OWN party_snapshots.flags (returned below) and on their D5
+          # counter; the victim's row is never touched.
           flags << "foreign_uid"
-          sighting = { "seen_by" => account_id, "at" => now.utc.iso8601, "kind" => "foreign_uid" }
-          @db[:monsters].where(id: uid).update(
-            flagged: true,
-            flags:   Sequel.lit("flags || ?::jsonb", [sighting].to_json),
-            updated_at: now
-          )
-          @log.call("mon: account #{account_id} projected FOREIGN uid #{uid} (owner #{owner}) -> flagged")
+          @log.call("mon: account #{account_id} projected FOREIGN uid #{uid} (owner #{owner}) -> sighting recorded against the projector")
         end
       end
       flags.uniq
