@@ -29,6 +29,7 @@ module PEMK
       "exp_rollback"        => 3,    # a mon's EXP dropped below its high-water (D6); latched
                                      # to 1 flag per episode, so 3 = 3 distinct rollback events
                                      # (a lone no-fault crash-restore is 1 and won't surface)
+      "mon_counterfeit"     => 2,    # a mon's locked traits (IVs/shiny/gender) changed
       "gift_refarm"         => 2,    # the same one-shot event granting the same item again
       "flag_rewind"         => 2,    # self-switches cleared en masse = a save rollback that
                                      # re-arms every one-shot event (NPC gifts, TMs, key items)
