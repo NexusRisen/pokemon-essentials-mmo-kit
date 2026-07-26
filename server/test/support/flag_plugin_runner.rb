@@ -160,4 +160,58 @@ check(results, "reset_clears_everything") do
   !PEMK::Flags.active? && PEMK::Flags::Delta.drain.nil?
 end
 
+# === step 4: login authority (facts only) ===================================
+
+# The union restores what a rollback dropped...
+check(results, "reconcile_unions_facts") do
+  PEMK::Flags.adopt_mode("shadow")
+  PEMK::Flags.adopt_policy("switches" => { "4" => "fact" })
+  $game_switches = Game_Switches.new
+  $game_self_switches = Game_SelfSwitches.new
+  PEMK::Flags.note_facts(switches: [4], self_switches: ["5:2:A"])
+  PEMK::Flags.reconcile
+  $game_switches[4] == true && $game_self_switches[[5, 2, "A"]] == true
+end
+
+# ...and can only ever ADD: state the client has and the server does not is untouched,
+# which is what makes an offline session safe.
+check(results, "reconcile_never_removes") do
+  $game_switches = Game_Switches.new
+  $game_self_switches = Game_SelfSwitches.new
+  $game_switches[4] = true
+  $game_self_switches[[9, 9, "B"]] = true      # earned offline; server knows nothing of it
+  PEMK::Flags.note_facts(switches: [], self_switches: [])
+  PEMK::Flags.reconcile
+  $game_switches[4] == true && $game_self_switches[[9, 9, "B"]] == true
+end
+
+# Applying server state must not be echoed straight back as a client write.
+check(results, "reconcile_does_not_echo") do
+  $game_switches = Game_Switches.new
+  $game_self_switches = Game_SelfSwitches.new
+  PEMK::Flags::Delta.reset
+  PEMK::Flags.note_facts(switches: [4], self_switches: ["5:2:A"])
+  PEMK::Flags.reconcile
+  PEMK::Flags::Delta.drain.nil?
+end
+
+# Suppression must be scoped, not sticky: a normal write after it still records.
+check(results, "suppression_is_scoped") do
+  PEMK::Flags::Delta.reset
+  PEMK::Flags::Delta.suppress { $game_switches[4] = true }
+  $game_switches[4] = false
+  $game_switches[4] = true
+  d = PEMK::Flags::Delta.drain
+  d && d[:switches] == { 4 => true }
+end
+
+# Nothing to apply, or the feature off, must be a clean no-op.
+check(results, "reconcile_is_inert_without_facts") do
+  PEMK::Flags.reconcile
+  PEMK::Flags.reset
+  PEMK::Flags.note_facts(switches: [4], self_switches: [])
+  PEMK::Flags.reconcile
+  $game_switches[4] == true   # unchanged from the previous check, not re-applied while off
+end
+
 puts JSON.generate(results)

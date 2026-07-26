@@ -38,7 +38,9 @@ module PEMK
       @accounts   = Accounts.new(@db)
       @sessions   = Sessions.new(@db)
       @characters = Characters.new(@db)
-      @ledger     = Ledger.new(@db, @config.economy_caps)
+      # Badges become monotonic once the sovereignty layer is on: they are progression,
+      # and a reloaded save pushing 0 must not erase them.
+      @ledger     = Ledger.new(@db, @config.economy_caps, monotonic: @config.flag_state == :on)
       @inventory  = Inventory.new(@db, @config.inventory_caps, logger: @log)
       @encounter_rolls = EncounterRolls.new(@db)   # M4 D3.2: persisted mints -> mon provenance
       # Provenance labeling only makes sense when the server actually mints encounters:
@@ -81,7 +83,9 @@ module PEMK
         @battle_records = BattleRecords.new(@db, mode: @config.battle_enforce_rng, logger: @log)
       end
       # Audit item 4: switches/variables/self-switches detection shadow.
-      @flag_state = FlagState.new(@db, policy: manifest_policy, logger: @log) if @config.flag_state != :off
+      if @config.flag_state != :off
+        @flag_state = FlagState.new(@db, policy: manifest_policy, facts: manifest_fact_keys, logger: @log)
+      end
       @gift_claims = GiftClaims.new(@db, logger: @log) if @config.flag_state != :off
       @audit      = Audit.new(@world, logger: @log)
       @pos_audit  = PositionAudit.new(@world, logger: @log, mode: @config.position_enforcement)   # M4 Layer B
@@ -148,7 +152,8 @@ module PEMK
       if @config.battle_enforce_catches == :on && @config.battle_enforce_encounters != :on
         @log.call("server: WARNING catch enforcement is on but encounter enforcement is #{@config.battle_enforce_encounters} — catches need a server encounter mint, so they will all fail-open to local")
       end
-      @log.call("server: flag state = #{@config.flag_state} (switches/variables shadow — detection-only#{@config.flag_state == :on ? '; `on` is reserved for part 2 and behaves as shadow' : ''})")
+      @log.call("server: flag state = #{@config.flag_state} " \
+                "(switches/variables#{@config.flag_state == :on ? '; facts materialized at login, grant-only' : ' — detection only'})")
       @log.call("server: position enforcement = #{@config.position_enforcement} (M4 Layer B)")
       @log.call("server: pickup enforcement = #{@config.pickup_enforce ? 'on' : 'off'} (M4 Layer C server-mint)")
       @log.call("server: WARNING pickup reset ALLOWED (PEMK_ALLOW_PICKUP_RESET=on) — DEV ONLY, disable in production") if @config.pickup_reset_allowed
@@ -1113,7 +1118,8 @@ module PEMK
         battle_enforce_resim: @config.battle_enforce_resim.to_s,             # M4 Layer D D8 enforcement mode
         flag_state: @config.flag_state.to_s,                                 # audit item 4: flags shadow
         flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0),
-        flag_policy: flag_policy }
+        flag_policy: flag_policy,
+        flag_facts: (@config.flag_state == :on && @flag_state ? @flag_state.materialize_facts(account_id) : nil) }
     end
 
     # The owned-id sets FlagState judges over, from the same manifest the client is
@@ -1128,6 +1134,18 @@ module PEMK
         next unless sec.is_a?(Hash)
 
         out[kind.to_sym] = sec.select { |_, e| e.is_a?(Hash) && e["tier"] && e["tier"] != "local" }.keys
+      end
+      out
+    end
+
+    # id -> stable name key for FACT-tier switches, so the ledger survives a renumber.
+    def manifest_fact_keys
+      m = @world.flag_manifest
+      return {} unless m.is_a?(Hash) && m["switches"].is_a?(Hash)
+
+      out = {}
+      m["switches"].each do |id, e|
+        out[id.to_i] = e["key"] if e.is_a?(Hash) && e["tier"] == "fact" && e["key"]
       end
       out
     end

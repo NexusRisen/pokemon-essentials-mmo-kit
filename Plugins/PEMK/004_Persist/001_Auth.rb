@@ -171,6 +171,7 @@ module PEMK
       (PEMK::BattleRng.adopt_mode(reply[:battle_enforce_rng]) rescue nil)          # M4-D7: rng/capture mode
       (PEMK::Flags.adopt_mode(reply[:flag_state]) rescue nil)                     # audit item 4: flag shadow
       (PEMK::Flags.adopt_policy(reply[:flag_policy]) rescue nil)   # build-time tier table (absent == local)
+      (PEMK::Flags.note_facts(reply[:flag_facts]) rescue nil)      # applied after the save loads
       save_token(reply[:token]) if reply[:token]
       save_local_account(@account_id)
       PEMK.log("auth: #{reply[:type]} account=#{@account_id} state=#{@pending_state ? 'received' : 'new'} econ=#{@pending_econ ? @pending_econ.size : 0}")
@@ -204,6 +205,7 @@ module PEMK
       (PEMK::BattleRng.adopt_mode(reply[:battle_enforce_rng]) rescue nil)          # M4-D7: rng/capture mode
       (PEMK::Flags.adopt_mode(reply[:flag_state]) rescue nil)                     # audit item 4: flag shadow
       (PEMK::Flags.adopt_policy(reply[:flag_policy]) rescue nil)   # build-time tier table (absent == local)
+      (PEMK::Flags.note_facts(reply[:flag_facts]) rescue nil)      # applied after the save loads
       :ok
     end
 
