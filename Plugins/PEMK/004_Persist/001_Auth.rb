@@ -160,6 +160,7 @@ module PEMK
       (PEMK::Sync.reset rescue nil)                          # fresh socket -> drop stale dirty/seq baseline
       (PEMK::Sync.adopt_econ_seq(reply[:econ_seq]) rescue nil) # ... then adopt the server's seq authority
       (PEMK::Sync.adopt_inv_seq(reply[:inv_seq]) rescue nil)  # ... same for the independent :inv channel
+      (PEMK::Sync.adopt_flags_seq(reply[:flags_seq]) rescue nil)  # ... and the :flags channel (else it dies on reconnect)
       (PEMK::Sync.adopt_mon_seq(reply[:mon_seq]) rescue nil)  # ... and the :mon_party projection channel
       (PEMK::Pickup.adopt_enforce(reply[:pickup_enforce]) rescue nil)  # M4-C: gate pickups only if server says on
       (PEMK::Pickup.adopt_reset_allowed(reply[:pickup_reset_allowed]) rescue nil)  # M4-C: dev-only F9 reset
@@ -191,6 +192,7 @@ module PEMK
       (PEMK::Sync.reset rescue nil)
       (PEMK::Sync.adopt_econ_seq(reply[:econ_seq]) rescue nil)
       (PEMK::Sync.adopt_inv_seq(reply[:inv_seq]) rescue nil)
+      (PEMK::Sync.adopt_flags_seq(reply[:flags_seq]) rescue nil)  # ... and the :flags channel (else it dies on reconnect)
       (PEMK::Sync.adopt_mon_seq(reply[:mon_seq]) rescue nil)
       (PEMK::Pickup.adopt_enforce(reply[:pickup_enforce]) rescue nil)  # M4-C
       (PEMK::Pickup.adopt_reset_allowed(reply[:pickup_reset_allowed]) rescue nil)  # M4-C: dev-only F9 reset

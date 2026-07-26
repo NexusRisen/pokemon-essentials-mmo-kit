@@ -25,6 +25,7 @@ module PEMK
     @mon_dirty   = false        # monsters may need uids / the party projection may have changed
     @mon_last    = nil          # hash of the last-sent party projection (send only on change)
     @flag_last   = nil          # hash of the last-sent switches/variables snapshot (send only on change)
+    @flag_dirty  = false        # story state changed -> the flags channel alone can trigger a flush
     @team_last   = nil          # hash of the last-sent full-stat team (M4 Layer D legality; send on change)
     @seq         = Hash.new(0)  # channel => monotonic seq (adopted from the server on login)
     @dirty_since = nil
@@ -42,6 +43,7 @@ module PEMK
       @mon_dirty = false
       @mon_last = nil
       @flag_last = nil
+      @flag_dirty = false
       @team_last = nil
       (PEMK::Monsters.reset rescue nil)
       (PEMK::Trade.reset rescue nil)   # a fresh socket must abandon any in-flight trade

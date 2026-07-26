@@ -72,6 +72,7 @@ module PEMK
         PosCorrect.reset                 # drop any un-applied snap-back from the dead session
         (ExpCorrect.reset rescue nil)    # ... and any un-applied EXP restore (M4-D6; rescued —
                                          # a fork missing 008 must not kill the reconnect FSM)
+        (Flags.reset rescue nil)         # ... and the advertised flag-shadow mode
         (BattleRng.reset rescue nil)     # ... and any pending battle seed (M4-D7; a dead
                                          # session's seed must not arm a later battle)
         NetStatus.on_disconnect   # player notice + reconnect FSM (no-op pre-login)

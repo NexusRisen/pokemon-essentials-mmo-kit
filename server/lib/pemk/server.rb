@@ -808,11 +808,15 @@ module PEMK
 
       seq = env[:seq]
       payload = { switches: env[:switches], variables: env[:variables], self_switches: env[:self_switches] }
-      @mailbox.submit(account_id) do
+      # A dropped job (queue full) must NOT leave the client believing its snapshot
+      # landed — it would advance its seq and the server would then reject every
+      # later one as stale. Nack so the client can resend.
+      queued = @mailbox.submit(account_id) do
         status, flags = @flag_state.apply_flags(account_id, payload, seq)
         flag_anomaly(account_id, :flag_rewind) if flags&.include?("rewind")
         @reactor.post { reply(conn, type: :flags_ack, seq: seq, flagged: status == :ack && flags.any?) }
       end
+      reply(conn, type: :flags_ack, seq: seq, busy: true) unless queued
     end
 
     # Audit item 4 (second half): an NPC gift / event-granted item. Fire-and-forget
@@ -1096,7 +1100,8 @@ module PEMK
         battle_enforce_exp: @config.battle_enforce_exp.to_s,                 # M4 Layer D D6 EXP mode
         battle_enforce_rng: @config.battle_enforce_rng.to_s,                 # M4 Layer D D7 rng/capture mode
         battle_enforce_resim: @config.battle_enforce_resim.to_s,             # M4 Layer D D8 enforcement mode
-        flag_state: @config.flag_state.to_s }                                # audit item 4: flags shadow
+        flag_state: @config.flag_state.to_s,                                 # audit item 4: flags shadow
+        flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0) }
     end
 
     # Zone-scoped presence: track each player's current map and fan a position

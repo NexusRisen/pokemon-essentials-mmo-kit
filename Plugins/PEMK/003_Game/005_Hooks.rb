@@ -108,6 +108,7 @@ EventHandlers.add(:on_enter_map, :pokemmo_zone_reset,
   proc { |_old_map_id|
     PEMK::Remotes.clear_all
     PEMK::Presence.announce_soon
+    (PEMK::Sync.mark_flags rescue nil)   # story state may have moved on the map we just left
     PEMK::Sync.flush_event(:map)
     PEMK::Checkpoint.request(:map)   # flag-only; executes at the first safe frame
   })

@@ -108,6 +108,21 @@ class FlagStateTest < Minitest::Test
     assert_equal 0, @db[:flag_snapshots].count
   end
 
+  # THE RECONNECT BUG: Sync.reset zeroes every channel seq on a new socket, and the
+  # server treats seq <= last_seq as a dup — so without the server advertising its
+  # high-water (flags_seq) and the client adopting it, the channel goes permanently
+  # silent after the first reconnect. This test pins the server half of that contract.
+  def test_snapshot_exposes_last_seq_so_a_reconnect_can_resume
+    @fs.apply_flags(@a, snap(switches: [1]), 7)
+    assert_equal 7, @fs.snapshot(@a)[:last_seq]
+
+    # a reconnect restarting at 1 WOULD be dropped as stale...
+    assert_equal :dup, @fs.apply_flags(@a, snap(switches: [1, 2]), 1).first
+    # ...which is exactly why the client must resume above the advertised high-water
+    assert_equal :ack, @fs.apply_flags(@a, snap(switches: [1, 2]), 8).first
+    assert_equal [1, 2], @fs.snapshot(@a)[:switches].to_a
+  end
+
   def test_non_integer_variables_are_dropped_not_rejected
     status, = @fs.apply_flags(@a, snap(variables: { "3" => "quest", "4" => 7 }), 1)
     assert_equal :ack, status
