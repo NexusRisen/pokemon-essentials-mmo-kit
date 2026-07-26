@@ -140,8 +140,10 @@ class WorldDataTest < Minitest::Test
     assert_match(/schema_version/, err.message)
   end
 
+  # v3 is now ACCEPTED (it only adds the optional :flags manifest), so the
+  # wrong-version case has to be a genuinely unknown one.
   def test_wrong_schema_version_is_boot_error
-    err = assert_raises(RuntimeError) { load(sample.merge("schema_version" => 3)) }
+    err = assert_raises(RuntimeError) { load(sample.merge("schema_version" => 42)) }
     assert_match(/schema_version/, err.message)
   end
 
@@ -185,4 +187,32 @@ class WorldDataTest < Minitest::Test
     assert_nil w.home
     assert_empty w.connections
   end
+  # --- v3: the optional flag manifest ------------------------------------------
+
+  # An operator who has not re-exported since sovereign variables landed keeps a
+  # WORKING server — v3 only ADDS a section, so v2 must stay valid.
+  def test_a_v2_export_is_still_accepted_and_has_no_manifest
+    w = load("schema_version" => 2, "maps" => {})
+    assert_nil w.flag_manifest
+    assert_equal "local", w.flag_tier(:switches, 42), "no manifest reads as all-local"
+  end
+
+  def test_a_v3_export_exposes_the_manifest_and_tiers
+    w = load("schema_version" => 3, "maps" => {},
+                   "flags" => { "manifest_version" => 1, "manifest_hash" => "abc",
+                                "switches" => { "42" => { "tier" => "fact", "key" => "sw:gym1" },
+                                                "7"  => { "tier" => "local", "why" => "unnamed" } },
+                                "variables" => { "10" => { "tier" => "mirror", "key" => "var:step" } } })
+    assert_equal "abc", w.flag_manifest["manifest_hash"]
+    assert_equal "fact",   w.flag_tier(:switches, 42)
+    assert_equal "local",  w.flag_tier(:switches, 7)
+    assert_equal "mirror", w.flag_tier(:variables, 10)
+    assert_equal "local",  w.flag_tier(:switches, 999), "an unclassified id degrades to local"
+    assert w.flag_manifest.frozen?
+  end
+
+  def test_an_unknown_schema_version_is_still_a_boot_error
+    assert_raises(RuntimeError) { load("schema_version" => 99, "maps" => {}) }
+  end
+
 end

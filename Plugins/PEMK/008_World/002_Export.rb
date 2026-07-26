@@ -22,7 +22,7 @@ module PEMK
   module WorldExport
     module_function
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3   # v3 adds the optional :flags manifest (v2 readers ignore it)
     OUT_PATH       = "server/data/world.json"   # relative to the game root (cwd)
 
     # -> counts hash. Raises on a write failure (surfaced by the menu).
@@ -67,6 +67,11 @@ module PEMK
       end
 
       doc = { :schema_version => SCHEMA_VERSION, :generated_at => stamp, :maps => maps }
+      # Step 2 of sovereign variables: classify the dev's own switch/variable usage.
+      # Optional by construction — a nil section just means "nothing to say", and the
+      # server treats a missing manifest as all-local (today's behaviour).
+      flags = (PEMK::FlagManifest.build rescue nil)
+      doc[:flags] = flags if flags
       conns = load_connections
       doc[:connections] = conns unless conns.empty?
       home = global_home
