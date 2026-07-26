@@ -27,10 +27,14 @@ module PEMK
   # warning); PRESENT-but-INVALID (unparseable / wrong schema_version / wrong shape)
   # -> BOOT ERROR, so a stale/corrupt world never boots silently.
   class WorldData
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION  = 3
+    # v2 exports stay valid: v3 only ADDS the optional :flags manifest, so an operator
+    # who has not re-exported since the sovereign-variables work keeps a working server
+    # (they simply have no manifest, which means all-local — today's behaviour).
+    ACCEPTED_VERSIONS = [2, 3].freeze
     BLOCKED = "f"   # a passability nibble of 0x0f == fully blocked
 
-    def initialize(path, expected_version: SCHEMA_VERSION, logger: nil)
+    def initialize(path, expected_version: ACCEPTED_VERSIONS, logger: nil)
       @log          = logger || ->(_m) {}
       @by_tile      = {}    # [map,x,y] => frozen object hash
       @maps         = {}    # map_id => { name:, width:, height:, count: }
@@ -104,6 +108,22 @@ module PEMK
     # The set of every species (String) that appears in ANY map's wild encounter table,
     # across all versions/types. Used by D5 to tell a fabricated wild-table mon (a
     # "client"-origin Pidgey) from a legitimate gift. Computed once, frozen.
+    # The build-time switch/variable classification (v3 exports). nil = no manifest,
+    # which the whole design reads as "everything is local" — the pre-sovereignty
+    # behaviour, never an error. Nothing consumes this yet (step 2 ships the data).
+    def flag_manifest
+      @flag_manifest
+    end
+
+    def flag_tier(kind, id)
+      m = @flag_manifest
+      return "local" unless m
+
+      section = m[kind.to_s]
+      entry = section.is_a?(Hash) ? section[id.to_s] : nil
+      entry.is_a?(Hash) ? (entry["tier"] || "local") : "local"
+    end
+
     def wild_species
       @wild_species ||= begin
         set = {}
@@ -166,9 +186,10 @@ module PEMK
           raise "world data #{path} is not valid JSON: #{e.message}"
         end
 
-      unless doc.is_a?(Hash) && doc["schema_version"] == expected_version
+      accepted = expected_version.is_a?(Array) ? expected_version : [expected_version]
+      unless doc.is_a?(Hash) && accepted.include?(doc["schema_version"])
         got = doc.is_a?(Hash) ? doc["schema_version"].inspect : "missing"
-        raise "world data #{path} schema_version #{got} != expected #{expected_version} " \
+        raise "world data #{path} schema_version #{got} not in #{accepted.inspect} " \
               "(regenerate via the in-game 'PEMK: Export World' action)"
       end
 
@@ -176,6 +197,10 @@ module PEMK
       raise "world data #{path} 'maps' is not an object" unless maps.is_a?(Hash)
 
       maps.each { |map_key, m| load_map(path, map_key, m) }
+      # The flag manifest (v3+). Absent = no classification = everything local, which
+      # is exactly the pre-sovereignty behaviour. Frozen; nothing reads it yet (step 2
+      # ships the data, step 3 consumes it).
+      @flag_manifest = doc["flags"].is_a?(Hash) ? deep_freeze(doc["flags"]) : nil
       @connections = freeze_connections(doc["connections"])
       @home  = coord_array(doc["home"], 4) || coord_array(doc["home"], 3)
       @start = coord_array(doc["start"], 3)
@@ -262,6 +287,15 @@ module PEMK
       return nil unless v.is_a?(Array) && v.length == len && v.all? { |n| n.is_a?(Integer) }
 
       v
+    end
+
+    # Recursively freeze a parsed JSON subtree (the manifest is read-only at runtime).
+    def deep_freeze(obj)
+      case obj
+      when Hash  then obj.each_value { |v| deep_freeze(v) }.freeze
+      when Array then obj.each { |v| deep_freeze(v) }.freeze
+      else obj.freeze
+      end
     end
 
     def freeze_connections(conns)
