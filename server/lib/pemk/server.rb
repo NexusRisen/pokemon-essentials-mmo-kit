@@ -38,7 +38,9 @@ module PEMK
       @accounts   = Accounts.new(@db)
       @sessions   = Sessions.new(@db)
       @characters = Characters.new(@db)
-      @ledger     = Ledger.new(@db, @config.economy_caps)
+      # Badges become monotonic once the sovereignty layer is on: they are progression,
+      # and a reloaded save pushing 0 must not erase them.
+      @ledger     = Ledger.new(@db, @config.economy_caps, monotonic: @config.flag_state == :on)
       @inventory  = Inventory.new(@db, @config.inventory_caps, logger: @log)
       @encounter_rolls = EncounterRolls.new(@db)   # M4 D3.2: persisted mints -> mon provenance
       # Provenance labeling only makes sense when the server actually mints encounters:
