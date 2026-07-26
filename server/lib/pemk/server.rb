@@ -81,7 +81,7 @@ module PEMK
         @battle_records = BattleRecords.new(@db, mode: @config.battle_enforce_rng, logger: @log)
       end
       # Audit item 4: switches/variables/self-switches detection shadow.
-      @flag_state = FlagState.new(@db, logger: @log) if @config.flag_state != :off
+      @flag_state = FlagState.new(@db, policy: manifest_policy, logger: @log) if @config.flag_state != :off
       @gift_claims = GiftClaims.new(@db, logger: @log) if @config.flag_state != :off
       @audit      = Audit.new(@world, logger: @log)
       @pos_audit  = PositionAudit.new(@world, logger: @log, mode: @config.position_enforcement)   # M4 Layer B
@@ -221,7 +221,7 @@ module PEMK
       # burst must absorb several back-to-back pushes; sustained 1/s is still ~100x an
       # honest client and bounds a flood to the blob cap per second.
       save: [10, 1.0], econ: [10, 4], inv: [10, 4], uid_req: [10, 4], mon_party: [10, 4],
-      flags: [10, 1.0], gift_claim: [20, 4],
+      flags: [10, 1.0], flag_delta: [20, 4], gift_claim: [20, 4],
       encounter_req: [10, 2], catch_req: [20, 6], battle_record: [6, 1], trade_commit: [6, 2],
       team_check: [10, 2], pickup_req: [20, 6], interact_claim: [30, 10],
       pos: [40, 20], dir: [40, 20], step: [40, 20], spawn: [10, 2]
@@ -262,6 +262,7 @@ module PEMK
       when :battle_end_report then handle_battle_end(conn, env, authed)
       when :battle_record then handle_battle_record(env, body, authed)
       when :flags then handle_flags(conn, env, authed)
+      when :flag_delta then handle_flag_delta(env, authed)
       when :gift_claim then handle_gift_claim(env, authed)
       when :trade_commit then handle_trade_commit(conn, env, authed)
       when :pos, :dir, :step, :spawn then handle_presence(conn, env, authed)
@@ -819,6 +820,16 @@ module PEMK
       reply(conn, type: :flags_ack, seq: seq, busy: true) unless queued
     end
 
+    # Step 3: an intercepted-write DELTA. Fire-and-forget; the server folds it into
+    # the mirror it compares against the next absolute snapshot (the trust gate).
+    def handle_flag_delta(env, account_id)
+      return unless @flag_state
+
+      payload = { switches: env[:switches], variables: env[:variables],
+                  self_switches: env[:self_switches], overflow: env[:overflow] }
+      @mailbox.submit(account_id) { @flag_state.apply_delta(account_id, payload) }
+    end
+
     # Audit item 4 (second half): an NPC gift / event-granted item. Fire-and-forget
     # DETECTION — the ledger records which one-shot event granted what, so a re-farm
     # (self-switch rewind -> the same event pays out again) leaves a trace naming it.
@@ -1101,7 +1112,42 @@ module PEMK
         battle_enforce_rng: @config.battle_enforce_rng.to_s,                 # M4 Layer D D7 rng/capture mode
         battle_enforce_resim: @config.battle_enforce_resim.to_s,             # M4 Layer D D8 enforcement mode
         flag_state: @config.flag_state.to_s,                                 # audit item 4: flags shadow
-        flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0) }
+        flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0),
+        flag_policy: flag_policy }
+    end
+
+    # The owned-id sets FlagState judges over, from the same manifest the client is
+    # handed — so the trust gate measures exactly the ids we claim, and nothing else.
+    def manifest_policy
+      m = @world.flag_manifest
+      return nil unless m.is_a?(Hash)
+
+      out = {}
+      %w[switches variables].each do |kind|
+        sec = m[kind]
+        next unless sec.is_a?(Hash)
+
+        out[kind.to_sym] = sec.select { |_, e| e.is_a?(Hash) && e["tier"] && e["tier"] != "local" }.keys
+      end
+      out
+    end
+
+    # The build-time tier table, pushed so BOTH sides provably agree on the policy.
+    # Only NON-LOCAL ids travel — absent means local, which is the pre-sovereignty
+    # behaviour, so the payload stays tiny (32 entries on the reference project).
+    def flag_policy
+      return nil unless @flag_state && @world.flag_manifest
+
+      out = {}
+      %w[switches variables].each do |kind|
+        sec = @world.flag_manifest[kind]
+        next unless sec.is_a?(Hash)
+
+        picked = {}
+        sec.each { |id, e| picked[id] = e["tier"] if e.is_a?(Hash) && e["tier"] && e["tier"] != "local" }
+        out[kind] = picked unless picked.empty?
+      end
+      out.empty? ? nil : out
     end
 
     # Zone-scoped presence: track each player's current map and fan a position

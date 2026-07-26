@@ -21,11 +21,44 @@ module PEMK
     MAX_ENTRIES = 4000   # mirrors the server cap; beyond it the snapshot isn't judged
 
     @mode = :off
+    # The tier table, pushed by the server at login (it owns the build-time manifest,
+    # so both sides provably agree). Only NON-LOCAL ids travel — everything absent is
+    # local, which is the pre-sovereignty behaviour, so a missing policy makes the
+    # whole layer inert rather than wrong.
+    @tiers = { :switches => {}, :variables => {} }
 
     module_function
 
     def reset
       @mode = :off
+      @tiers = { :switches => {}, :variables => {} }
+      (PEMK::Flags::Delta.reset rescue nil)
+    end
+
+    # policy: { "switches" => {"4"=>"fact", ...}, "variables" => {"7"=>"mirror"} }
+    def adopt_policy(policy)
+      t = { :switches => {}, :variables => {} }
+      if policy.is_a?(Hash)
+        %w[switches variables].each do |kind|
+          sec = policy[kind]
+          next unless sec.is_a?(Hash)
+
+          sec.each { |id, tier| t[kind.to_sym][id.to_i] = tier.to_s if id.to_i.positive? }
+        end
+      end
+      @tiers = t
+      PEMK.log("flags: adopted policy (#{t[:switches].size} switches, #{t[:variables].size} variables)")
+    end
+
+    # Is this id the server's business? Absent => local => never recorded, never sent.
+    def owned?(kind, id)
+      return false unless active? && id.is_a?(Integer)
+
+      !@tiers[kind].nil? && !@tiers[kind][id].nil?
+    end
+
+    def tier(kind, id)
+      (@tiers[kind] || {})[id] || "local"
     end
 
     def adopt_mode(v)

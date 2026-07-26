@@ -75,6 +75,13 @@ module PEMK
       @seq[:inv] = n if n.is_a?(Integer) && n > @seq[:inv]
     end
 
+    # Twin for the :flags channel. Without it, reset zeroes the seq on a new socket
+    # and the server drops every later snapshot as stale — the channel goes silent
+    # after the first reconnect.
+    def adopt_flags_seq(n)
+      @seq[:flags] = n if n.is_a?(Integer) && n > @seq[:flags]
+    end
+
     # Twin for the :mon_party projection channel. (:uid_req needs NO adoption — its
     # seq is log-correlation only; mint idempotency lives in the persisted nonce.)
     def adopt_mon_seq(n)
@@ -98,6 +105,13 @@ module PEMK
       (PEMK::Checkpoint.request(:t1) rescue nil)
     end
 
+    # Story state (switches/variables/self-switches) moved. Flag-only: the whole
+    # non-default set is re-read once at flush and hash-gated, exactly like the bag.
+    def mark_flags
+      @flag_dirty = true
+      touch
+    end
+
     # Bag mutation: flag-only (the whole bag is re-read once at flush, not per op —
     # a loop of 500 adds costs 500 flag-sets, one snapshot).
     def mark_inv
@@ -117,7 +131,10 @@ module PEMK
     end
 
     def dirty?
-      !@econ.empty? || @inv_dirty || @mon_dirty
+      # @flag_dirty belongs here: without it a PURE story change (an event sets a
+      # switch and nothing else moves) never flushed — the flags channel could only
+      # ride along with another dirty channel.
+      !@econ.empty? || @inv_dirty || @mon_dirty || @flag_dirty
     end
 
     # --- EVENT: flush now (map change, battle end, menu/scene close, quit) ------
@@ -150,12 +167,24 @@ module PEMK
       # sent as an absolute snapshot and hash-gated so an unchanged story costs
       # nothing. Detection shadow — the server records it and flags a rewind.
       if (PEMK::Flags.active? rescue false)
+        # Deltas FIRST: the server must fold every intercepted write into its mirror
+        # BEFORE the absolute snapshot arrives, or the trust-gate comparison would
+        # judge a mirror that is legitimately one flush behind.
+        d = (PEMK::Flags::Delta.drain rescue nil)
+        if d
+          c.send_message({ :type => :flag_delta, :switches => d[:switches],
+                           :variables => d[:variables], :self_switches => d[:self_switches],
+                           :overflow => d[:overflow] })
+        end
         snap = (PEMK::Flags.projection rescue nil)
-        if snap && snap.hash != @flag_last
-          c.send_message({ :type => :flags, :switches => snap[:switches],
-                           :variables => snap[:variables], :self_switches => snap[:self_switches],
-                           :seq => (@seq[:flags] += 1) })
-          @flag_last = snap.hash
+        if snap
+          if snap.hash != @flag_last
+            c.send_message({ :type => :flags, :switches => snap[:switches],
+                             :variables => snap[:variables], :self_switches => snap[:self_switches],
+                             :seq => (@seq[:flags] += 1) })
+            @flag_last = snap.hash
+          end
+          @flag_dirty = false   # clear only once the state was actually readable
         end
       end
       # Bag: one whole-bag read HERE (game thread), sent as an absolute snapshot.
