@@ -231,6 +231,13 @@ module PEMK
           # key is actively unstable. No report-only escape hatch.
           entry[:tier] = "local"
           entry[:why]  = "unnamed"
+        elsif name =~ /\Atemp[\s_\-]/i
+          # Scratch: Essentials' own convention for a value that lives inside one menu
+          # or one animation. The real project data makes the case — "Temp Pokemon
+          # Choice" takes 90 writes and "PokeCenter Healing Ball Count" 36, all of it
+          # transient with no exploit value. Replicating that is pure wire noise.
+          entry[:tier] = "local"
+          entry[:why]  = "temp scratch (engine convention)"
         elsif name.start_with?("s:")
           entry[:tier] = "local"
           entry[:why]  = "s-prefixed name is evaluated as Ruby by the engine"

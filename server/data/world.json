@@ -1,6 +1,6 @@
 {
-  "schema_version": 2,
-  "generated_at": "2026-07-04T18:07:24",
+  "schema_version": 3,
+  "generated_at": "2026-07-26T14:05:54",
   "maps": {
     "1": {
       "name": "Intro",
@@ -3235,6 +3235,458 @@
         }
       }
     }
+  },
+  "flags": {
+    "manifest_version": 1,
+    "switches": {
+      "1": {
+        "writes": 7,
+        "reads": 7,
+        "key": "sw:starting_over",
+        "tier": "mirror",
+        "config_candidate": true
+      },
+      "2": {
+        "writes": 6,
+        "reads": 0,
+        "key": "sw:seen_pok_rus_in_pok_center",
+        "tier": "fact",
+        "config_candidate": true
+      },
+      "3": {
+        "writes": 4,
+        "reads": 6,
+        "key": "sw:choosing_starter",
+        "tier": "mirror"
+      },
+      "4": {
+        "writes": 1,
+        "reads": 1,
+        "key": "sw:defeated_gym_1",
+        "tier": "fact"
+      },
+      "5": {
+        "writes": 1,
+        "reads": 1,
+        "key": "sw:defeated_gym_2",
+        "tier": "fact"
+      },
+      "12": {
+        "writes": 1,
+        "reads": 1,
+        "key": "sw:defeated_elite_four",
+        "tier": "fact"
+      },
+      "13": {
+        "writes": 3,
+        "reads": 1,
+        "key": "sw:fossil_revival_in_progress",
+        "tier": "mirror"
+      },
+      "15": {
+        "writes": 0,
+        "reads": 1,
+        "tier": "local",
+        "why": "s-prefixed name is evaluated as Ruby by the engine"
+      },
+      "19": {
+        "writes": 0,
+        "reads": 1,
+        "tier": "local",
+        "why": "s-prefixed name is evaluated as Ruby by the engine"
+      },
+      "20": {
+        "writes": 0,
+        "reads": 1,
+        "tier": "local",
+        "why": "s-prefixed name is evaluated as Ruby by the engine"
+      },
+      "21": {
+        "writes": 0,
+        "reads": 6,
+        "tier": "local",
+        "why": "s-prefixed name is evaluated as Ruby by the engine"
+      },
+      "22": {
+        "writes": 0,
+        "reads": 37,
+        "tier": "local",
+        "why": "s-prefixed name is evaluated as Ruby by the engine"
+      },
+      "23": {
+        "writes": 0,
+        "reads": 1,
+        "tier": "local",
+        "why": "s-prefixed name is evaluated as Ruby by the engine"
+      },
+      "24": {
+        "writes": 0,
+        "reads": 1,
+        "tier": "local",
+        "why": "s-prefixed name is evaluated as Ruby by the engine"
+      },
+      "25": {
+        "writes": 0,
+        "reads": 1,
+        "tier": "local",
+        "why": "s-prefixed name is evaluated as Ruby by the engine"
+      },
+      "26": {
+        "writes": 0,
+        "reads": 2,
+        "tier": "local",
+        "why": "s-prefixed name is evaluated as Ruby by the engine"
+      },
+      "27": {
+        "writes": 0,
+        "reads": 5,
+        "tier": "local",
+        "why": "s-prefixed name is evaluated as Ruby by the engine"
+      },
+      "28": {
+        "writes": 0,
+        "reads": 9,
+        "tier": "local",
+        "why": "s-prefixed name is evaluated as Ruby by the engine"
+      },
+      "29": {
+        "writes": 2,
+        "reads": 1,
+        "key": "sw:has_national_dex",
+        "tier": "mirror"
+      },
+      "30": {
+        "writes": 0,
+        "reads": 2,
+        "tier": "local",
+        "why": "s-prefixed name is evaluated as Ruby by the engine"
+      },
+      "31": {
+        "writes": 2,
+        "reads": 0,
+        "key": "sw:shiny_wild_pok_mon",
+        "tier": "mirror",
+        "config_candidate": true
+      },
+      "32": {
+        "writes": 4,
+        "reads": 0,
+        "key": "sw:fateful_encounters",
+        "tier": "mirror",
+        "config_candidate": true
+      },
+      "51": {
+        "writes": 1,
+        "reads": 0,
+        "key": "sw:visited_berth_island",
+        "tier": "fact"
+      },
+      "52": {
+        "writes": 1,
+        "reads": 0,
+        "key": "sw:visited_faraday_island",
+        "tier": "fact"
+      },
+      "53": {
+        "writes": 1,
+        "reads": 1,
+        "key": "sw:latias_latios_roaming",
+        "tier": "fact"
+      },
+      "54": {
+        "writes": 1,
+        "reads": 1,
+        "key": "sw:kyogre_roaming",
+        "tier": "fact"
+      },
+      "55": {
+        "writes": 1,
+        "reads": 1,
+        "key": "sw:entei_roaming",
+        "tier": "fact"
+      },
+      "56": {
+        "writes": 2,
+        "reads": 1,
+        "key": "sw:reset_mew_encounter",
+        "tier": "mirror"
+      },
+      "57": {
+        "writes": 1,
+        "reads": 2,
+        "key": "sw:boulder_down_hole_rock_cave",
+        "tier": "fact"
+      },
+      "58": {
+        "writes": 1,
+        "reads": 2,
+        "key": "sw:boulder_down_hole_ice_cave",
+        "tier": "fact"
+      }
+    },
+    "variables": {
+      "1": {
+        "writes": 90,
+        "reads": 36,
+        "key": "var:temp_pokemon_choice",
+        "tier": "mirror"
+      },
+      "2": {
+        "writes": 54,
+        "reads": 10,
+        "key": "var:temp_move_choice",
+        "tier": "mirror"
+      },
+      "3": {
+        "writes": 11,
+        "reads": 11,
+        "key": "var:temp_pokemon_name",
+        "tier": "mirror"
+      },
+      "4": {
+        "writes": 12,
+        "reads": 15,
+        "key": "var:temp_move_name",
+        "tier": "mirror"
+      },
+      "5": {
+        "writes": 7,
+        "reads": 10,
+        "key": "var:temp_text_entry",
+        "tier": "mirror"
+      },
+      "6": {
+        "writes": 36,
+        "reads": 48,
+        "key": "var:pok_center_healing_ball_count",
+        "tier": "mirror"
+      },
+      "7": {
+        "writes": 3,
+        "reads": 5,
+        "key": "var:starter_choice",
+        "tier": "mirror"
+      },
+      "8": {
+        "writes": 2,
+        "reads": 0,
+        "key": "var:apricorn_being_converted",
+        "tier": "mirror"
+      },
+      "9": {
+        "writes": 2,
+        "reads": 0,
+        "key": "var:fossil_being_revived",
+        "tier": "mirror"
+      },
+      "10": {
+        "writes": 7,
+        "reads": 4,
+        "key": "var:elevator_current_floor",
+        "tier": "mirror"
+      },
+      "11": {
+        "writes": 5,
+        "reads": 3,
+        "key": "var:elevator_new_floor",
+        "tier": "mirror"
+      },
+      "12": {
+        "writes": 2,
+        "reads": 0,
+        "key": "var:rival_name",
+        "tier": "mirror"
+      },
+      "13": {
+        "writes": 1,
+        "reads": 0,
+        "key": "var:e4_defeated_count",
+        "tier": "mirror"
+      },
+      "14": {
+        "writes": 7,
+        "reads": 0,
+        "key": "var:combined_fossil_species",
+        "tier": "mirror"
+      }
+    },
+    "self_switches": {
+      "policy": "fact",
+      "repeatable": [
+        "13:17",
+        "6:2"
+      ]
+    },
+    "unjudgeable": [
+      "script branch at 10:3 is an eval — unjudgeable",
+      "script branch at 10:4 is an eval — unjudgeable",
+      "script branch at 11:2 is an eval — unjudgeable",
+      "script branch at 11:4 is an eval — unjudgeable",
+      "script branch at 11:5 is an eval — unjudgeable",
+      "script branch at 12:2 is an eval — unjudgeable",
+      "script branch at 12:3 is an eval — unjudgeable",
+      "script branch at 12:4 is an eval — unjudgeable",
+      "script branch at 12:5 is an eval — unjudgeable",
+      "script branch at 13:17 is an eval — unjudgeable",
+      "script branch at 13:19 is an eval — unjudgeable",
+      "script branch at 13:21 is an eval — unjudgeable",
+      "script branch at 13:24 is an eval — unjudgeable",
+      "script branch at 13:25 is an eval — unjudgeable",
+      "script branch at 13:26 is an eval — unjudgeable",
+      "script branch at 13:27 is an eval — unjudgeable",
+      "script branch at 13:28 is an eval — unjudgeable",
+      "script branch at 13:29 is an eval — unjudgeable",
+      "script branch at 13:30 is an eval — unjudgeable",
+      "script branch at 14:3 is an eval — unjudgeable",
+      "script branch at 15:1 is an eval — unjudgeable",
+      "script branch at 16:1 is an eval — unjudgeable",
+      "script branch at 17:1 is an eval — unjudgeable",
+      "script branch at 18:1 is an eval — unjudgeable",
+      "script branch at 19:2 is an eval — unjudgeable",
+      "script branch at 21:15 is an eval — unjudgeable",
+      "script branch at 21:16 is an eval — unjudgeable",
+      "script branch at 21:17 is an eval — unjudgeable",
+      "script branch at 21:18 is an eval — unjudgeable",
+      "script branch at 21:27 is an eval — unjudgeable",
+      "script branch at 23:1 is an eval — unjudgeable",
+      "script branch at 23:2 is an eval — unjudgeable",
+      "script branch at 23:3 is an eval — unjudgeable",
+      "script branch at 23:4 is an eval — unjudgeable",
+      "script branch at 23:6 is an eval — unjudgeable",
+      "script branch at 23:7 is an eval — unjudgeable",
+      "script branch at 23:9 is an eval — unjudgeable",
+      "script branch at 24:1 is an eval — unjudgeable",
+      "script branch at 25:2 is an eval — unjudgeable",
+      "script branch at 25:3 is an eval — unjudgeable",
+      "script branch at 25:4 is an eval — unjudgeable",
+      "script branch at 26:3 is an eval — unjudgeable",
+      "script branch at 26:4 is an eval — unjudgeable",
+      "script branch at 26:6 is an eval — unjudgeable",
+      "script branch at 26:7 is an eval — unjudgeable",
+      "script branch at 26:8 is an eval — unjudgeable",
+      "script branch at 27:3 is an eval — unjudgeable",
+      "script branch at 27:4 is an eval — unjudgeable",
+      "script branch at 28:1 is an eval — unjudgeable",
+      "script branch at 28:2 is an eval — unjudgeable",
+      "script branch at 29:4 is an eval — unjudgeable",
+      "script branch at 2:1 is an eval — unjudgeable",
+      "script branch at 2:2 is an eval — unjudgeable",
+      "script branch at 2:4 is an eval — unjudgeable",
+      "script branch at 30:2 is an eval — unjudgeable",
+      "script branch at 31:1 is an eval — unjudgeable",
+      "script branch at 31:10 is an eval — unjudgeable",
+      "script branch at 31:11 is an eval — unjudgeable",
+      "script branch at 31:12 is an eval — unjudgeable",
+      "script branch at 31:13 is an eval — unjudgeable",
+      "script branch at 31:15 is an eval — unjudgeable",
+      "script branch at 31:16 is an eval — unjudgeable",
+      "script branch at 31:17 is an eval — unjudgeable",
+      "script branch at 31:22 is an eval — unjudgeable",
+      "script branch at 31:23 is an eval — unjudgeable",
+      "script branch at 31:24 is an eval — unjudgeable",
+      "script branch at 31:28 is an eval — unjudgeable",
+      "script branch at 31:29 is an eval — unjudgeable",
+      "script branch at 31:4 is an eval — unjudgeable",
+      "script branch at 31:5 is an eval — unjudgeable",
+      "script branch at 31:6 is an eval — unjudgeable",
+      "script branch at 31:7 is an eval — unjudgeable",
+      "script branch at 31:8 is an eval — unjudgeable",
+      "script branch at 31:9 is an eval — unjudgeable",
+      "script branch at 35:1 is an eval — unjudgeable",
+      "script branch at 36:1 is an eval — unjudgeable",
+      "script branch at 36:8 is an eval — unjudgeable",
+      "script branch at 36:9 is an eval — unjudgeable",
+      "script branch at 37:3 is an eval — unjudgeable",
+      "script branch at 3:14 is an eval — unjudgeable",
+      "script branch at 3:8 is an eval — unjudgeable",
+      "script branch at 46:1 is an eval — unjudgeable",
+      "script branch at 47:1 is an eval — unjudgeable",
+      "script branch at 47:11 is an eval — unjudgeable",
+      "script branch at 47:12 is an eval — unjudgeable",
+      "script branch at 47:2 is an eval — unjudgeable",
+      "script branch at 47:3 is an eval — unjudgeable",
+      "script branch at 47:4 is an eval — unjudgeable",
+      "script branch at 47:5 is an eval — unjudgeable",
+      "script branch at 47:6 is an eval — unjudgeable",
+      "script branch at 47:7 is an eval — unjudgeable",
+      "script branch at 49:10 is an eval — unjudgeable",
+      "script branch at 49:11 is an eval — unjudgeable",
+      "script branch at 49:12 is an eval — unjudgeable",
+      "script branch at 49:15 is an eval — unjudgeable",
+      "script branch at 4:1 is an eval — unjudgeable",
+      "script branch at 4:12 is an eval — unjudgeable",
+      "script branch at 52:1 is an eval — unjudgeable",
+      "script branch at 52:2 is an eval — unjudgeable",
+      "script branch at 52:3 is an eval — unjudgeable",
+      "script branch at 52:4 is an eval — unjudgeable",
+      "script branch at 52:5 is an eval — unjudgeable",
+      "script branch at 52:6 is an eval — unjudgeable",
+      "script branch at 53:1 is an eval — unjudgeable",
+      "script branch at 54:2 is an eval — unjudgeable",
+      "script branch at 54:3 is an eval — unjudgeable",
+      "script branch at 54:4 is an eval — unjudgeable",
+      "script branch at 55:11 is an eval — unjudgeable",
+      "script branch at 55:3 is an eval — unjudgeable",
+      "script branch at 55:4 is an eval — unjudgeable",
+      "script branch at 55:7 is an eval — unjudgeable",
+      "script branch at 56:1 is an eval — unjudgeable",
+      "script branch at 57:11 is an eval — unjudgeable",
+      "script branch at 57:3 is an eval — unjudgeable",
+      "script branch at 57:4 is an eval — unjudgeable",
+      "script branch at 57:7 is an eval — unjudgeable",
+      "script branch at 58:3 is an eval — unjudgeable",
+      "script branch at 58:4 is an eval — unjudgeable",
+      "script branch at 58:7 is an eval — unjudgeable",
+      "script branch at 59:1 is an eval — unjudgeable",
+      "script branch at 5:1 is an eval — unjudgeable",
+      "script branch at 5:11 is an eval — unjudgeable",
+      "script branch at 60:3 is an eval — unjudgeable",
+      "script branch at 60:5 is an eval — unjudgeable",
+      "script branch at 61:1 is an eval — unjudgeable",
+      "script branch at 62:4 is an eval — unjudgeable",
+      "script branch at 62:5 is an eval — unjudgeable",
+      "script branch at 62:8 is an eval — unjudgeable",
+      "script branch at 63:1 is an eval — unjudgeable",
+      "script branch at 64:1 is an eval — unjudgeable",
+      "script branch at 65:1 is an eval — unjudgeable",
+      "script branch at 66:1 is an eval — unjudgeable",
+      "script branch at 67:2 is an eval — unjudgeable",
+      "script branch at 69:5 is an eval — unjudgeable",
+      "script branch at 6:2 is an eval — unjudgeable",
+      "script branch at 71:1 is an eval — unjudgeable",
+      "script branch at 71:3 is an eval — unjudgeable",
+      "script branch at 71:4 is an eval — unjudgeable",
+      "script branch at 72:4 is an eval — unjudgeable",
+      "script branch at 72:5 is an eval — unjudgeable",
+      "script branch at 72:6 is an eval — unjudgeable",
+      "script branch at 72:7 is an eval — unjudgeable",
+      "script branch at 74:1 is an eval — unjudgeable",
+      "script branch at 7:1 is an eval — unjudgeable",
+      "script branch at 7:12 is an eval — unjudgeable",
+      "script branch at 7:2 is an eval — unjudgeable",
+      "script branch at 7:3 is an eval — unjudgeable",
+      "script branch at 7:4 is an eval — unjudgeable",
+      "script branch at 7:7 is an eval — unjudgeable",
+      "script branch at 7:8 is an eval — unjudgeable",
+      "script branch at 7:9 is an eval — unjudgeable",
+      "script branch at 8:3 is an eval — unjudgeable",
+      "script branch at 8:5 is an eval — unjudgeable",
+      "script branch at 9:2 is an eval — unjudgeable",
+      "script branch at common:1 is an eval — unjudgeable",
+      "var operand kind 2 at 19:2 is not statically derivable",
+      "var operand kind 6 at 31:15 is not statically derivable",
+      "var operand kind 6 at 31:16 is not statically derivable",
+      "var operand kind 6 at 34:10 is not statically derivable",
+      "var operand kind 6 at 49:8 is not statically derivable",
+      "var operand kind 7 at 24:1 is not statically derivable",
+      "var operand kind 7 at 27:3 is not statically derivable",
+      "var operand kind 7 at 36:1 is not statically derivable",
+      "var operand kind 7 at 53:1 is not statically derivable",
+      "var operand kind 7 at 55:11 is not statically derivable",
+      "var operand kind 7 at 57:11 is not statically derivable",
+      "var operand kind 7 at 9:2 is not statically derivable"
+    ],
+    "manifest_hash": "e76d19474999dedf"
   },
   "connections": [
     [41, "N", 0, 40, "S", 0],
