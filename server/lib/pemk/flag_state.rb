@@ -69,6 +69,31 @@ module PEMK
       0
     end
 
+    # Login materialization: hand the client its facts AND fold them into the mirror.
+    #
+    # The client applies them with delta recording suppressed - it must not echo back
+    # what we just sent - so without this fold the mirror would not know that state
+    # exists, and the next snapshot would report our own restore as missed writes.
+    # (The trust gate caught exactly that.) We know precisely what we sent, so the
+    # mirror stays a live measurement instead of being invalidated.
+    def materialize_facts(account_id, now: Time.now)
+      f = facts_for(account_id)
+      return f if f[:switches].empty? && f[:self_switches].empty?
+
+      row = @db[:flag_snapshots].where(account_id: account_id).first
+      return f unless row && row[:mirror].respond_to?(:to_h)
+
+      mirror = row[:mirror].to_h
+      f[:switches].each     { |id| mirror["sw/#{id}"] = true if owned_switch?(id) }
+      f[:self_switches].each { |k| mirror["ss/#{k}"] = true }
+      @db[:flag_snapshots].where(account_id: account_id)
+                          .update(mirror: Sequel.pg_jsonb(mirror), updated_at: now)
+      f
+    rescue StandardError => e
+      @log.call("flags: materialize failed #{e.class}: #{e.message}")
+      facts_for(account_id)
+    end
+
     # What the client must be holding at login. -> { switches: [id,...],
     # self_switches: ["m:e:A",...] }. A fact whose name no longer maps to an id
     # (the dev deleted or renamed the switch) is simply dropped, never guessed.

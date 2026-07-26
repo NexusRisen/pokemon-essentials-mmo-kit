@@ -1117,7 +1117,7 @@ module PEMK
         flag_state: @config.flag_state.to_s,                                 # audit item 4: flags shadow
         flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0),
         flag_policy: flag_policy,
-        flag_facts: (@config.flag_state == :on && @flag_state ? @flag_state.facts_for(account_id) : nil) }
+        flag_facts: (@config.flag_state == :on && @flag_state ? @flag_state.materialize_facts(account_id) : nil) }
     end
 
     # The owned-id sets FlagState judges over, from the same manifest the client is

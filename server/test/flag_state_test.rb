@@ -260,4 +260,28 @@ class FlagStateTest < Minitest::Test
     assert_empty @fs.facts_for(@a)[:switches]
   end
 
+  # The restore writes into the client with delta recording suppressed, so the mirror
+  # must be told what we sent - otherwise the next snapshot reports our own restore as
+  # missed writes. The trust gate caught this in a live session.
+  def test_materializing_facts_folds_them_into_the_mirror
+    @fs.apply_flags(@a, snap(switches: [4], self_switches: ["5:2:A"]), 1)
+    # the player reloads an older save that lost the self-switch
+    @fs.apply_flags(@a, snap(switches: [4], self_switches: []), 2)
+
+    f = @fs.materialize_facts(@a)
+    assert_includes f[:self_switches], "5:2:A"
+    assert_equal true, @fs.snapshot(@a)[:mirror].to_h["ss/5:2:A"], "the mirror must know what we restored"
+
+    # the client applies it and reports the restored state: no drift
+    @fs.apply_flags(@a, snap(switches: [4], self_switches: ["5:2:A"]), 3)
+    assert_nil @fs.snapshot(@a)[:drift]
+  end
+
+  def test_materialize_is_a_no_op_without_facts
+    @fs.apply_flags(@a, snap(switches: [1]), 1)   # mirror-tier, never a fact
+    f = @fs.materialize_facts(@a)
+    assert_empty f[:switches]
+    assert_empty f[:self_switches]
+  end
+
 end
