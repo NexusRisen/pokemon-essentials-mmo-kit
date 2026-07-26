@@ -56,6 +56,10 @@ module PEMK
 
     # --- triggers (flag-only; execution is always deferred to the gated tick) ---
     def request(reason)
+      # Anything worth checkpointing may have moved story state (an event finished,
+      # a gift was received, a battle ended) — arm the flags channel on the same
+      # signal rather than inventing a second cadence.
+      (PEMK::Sync.mark_flags rescue nil)
       if @pending
         @pending[:reasons] << reason
       else
