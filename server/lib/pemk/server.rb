@@ -1096,7 +1096,8 @@ module PEMK
         battle_enforce_exp: @config.battle_enforce_exp.to_s,                 # M4 Layer D D6 EXP mode
         battle_enforce_rng: @config.battle_enforce_rng.to_s,                 # M4 Layer D D7 rng/capture mode
         battle_enforce_resim: @config.battle_enforce_resim.to_s,             # M4 Layer D D8 enforcement mode
-        flag_state: @config.flag_state.to_s }                                # audit item 4: flags shadow
+        flag_state: @config.flag_state.to_s,                                 # audit item 4: flags shadow
+        flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0) }
     end
 
     # Zone-scoped presence: track each player's current map and fan a position
