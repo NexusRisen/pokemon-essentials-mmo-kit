@@ -126,11 +126,12 @@ module PEMK
       raw = env.fetch("PEMK_RESIM_MIN_STRIKES", "").to_s.strip
       @resim_min_strikes = raw.match?(/\A[1-9]\d*\z/) ? raw.to_i : 2
 
-      # Audit item 4: the switches/variables/self-switches DETECTION shadow. off =
-      # nothing; shadow = record the snapshot and flag a self-switch rewind. `on` is
-      # RESERVED for part 2 (server-owned flags) and currently behaves as shadow —
-      # making the server authoritative here needs the world-vs-player ID partition,
-      # which is a game-design decision, not an engineering one.
+      # Sovereign variables. off = nothing; shadow = record the snapshot, fold the
+      # delta stream into a mirror and measure the two against each other, granting
+      # progression facts along the way; on = additionally MATERIALIZE those facts
+      # into the client at login (a grant-only union, so it can restore progress but
+      # never destroy any). Mirrored VALUES are not yet applied at login: overwriting
+      # a counter needs to know which side is newer, which step 5's fencing supplies.
       fmode = env.fetch("PEMK_FLAG_STATE", "off").to_s.strip.downcase
       @flag_state = %w[off shadow on].include?(fmode) ? fmode.to_sym : :off
 

@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "generated_at": "2026-07-26T14:05:54",
+  "generated_at": "2026-07-26T14:49:13",
   "maps": {
     "1": {
       "name": "Intro",
@@ -3428,32 +3428,32 @@
       "1": {
         "writes": 90,
         "reads": 36,
-        "key": "var:temp_pokemon_choice",
-        "tier": "mirror"
+        "tier": "local",
+        "why": "temp scratch (engine convention)"
       },
       "2": {
         "writes": 54,
         "reads": 10,
-        "key": "var:temp_move_choice",
-        "tier": "mirror"
+        "tier": "local",
+        "why": "temp scratch (engine convention)"
       },
       "3": {
         "writes": 11,
         "reads": 11,
-        "key": "var:temp_pokemon_name",
-        "tier": "mirror"
+        "tier": "local",
+        "why": "temp scratch (engine convention)"
       },
       "4": {
         "writes": 12,
         "reads": 15,
-        "key": "var:temp_move_name",
-        "tier": "mirror"
+        "tier": "local",
+        "why": "temp scratch (engine convention)"
       },
       "5": {
         "writes": 7,
         "reads": 10,
-        "key": "var:temp_text_entry",
-        "tier": "mirror"
+        "tier": "local",
+        "why": "temp scratch (engine convention)"
       },
       "6": {
         "writes": 36,
@@ -3686,7 +3686,7 @@
       "var operand kind 7 at 57:11 is not statically derivable",
       "var operand kind 7 at 9:2 is not statically derivable"
     ],
-    "manifest_hash": "e76d19474999dedf"
+    "manifest_hash": "c7a882a882901a75"
   },
   "connections": [
     [41, "N", 0, 40, "S", 0],

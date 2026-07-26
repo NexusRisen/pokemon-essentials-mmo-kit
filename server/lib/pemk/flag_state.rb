@@ -29,11 +29,89 @@ module PEMK
     # policy: { switches: Set/Array of non-local ids, variables: ... }. The comparison
     # is only meaningful over ids the POLICY claims — a LOCAL id is legitimately absent
     # from the delta stream, and judging it would report our own scope as a divergence.
-    def initialize(db, policy: nil, logger: nil)
+    def initialize(db, policy: nil, facts: nil, logger: nil)
       @db  = db
       @log = logger || ->(_m) {}
       @owned_switches = to_id_set(policy && (policy[:switches] || policy["switches"]))
       @owned_vars     = to_id_set(policy && (policy[:variables] || policy["variables"]))
+      # id <-> stable key for fact-tier switches. Keys are name-derived because the
+      # compiler renumbers ids, so the stored fact survives a renumber and resolves
+      # back to whatever id currently carries that name.
+      @fact_key_by_id = {}
+      @fact_id_by_key = {}
+      (facts || {}).each do |id, key|
+        @fact_key_by_id[id.to_i] = key.to_s
+        @fact_id_by_key[key.to_s] = id.to_i
+      end
+    end
+
+    # --- step 4: the grant-only progression ledger -----------------------------
+
+    # Union the facts implied by an absolute snapshot into the ledger. Grant-only:
+    # a rollback cannot take one back, which is what makes rewind detection moot.
+    # -> number of NEW facts granted.
+    def grant_facts(account_id, switches, selfsw, now: Time.now)
+      keys = []
+      switches.each { |id| (k = @fact_key_by_id[id]) && keys << k }
+      selfsw.each   { |k| keys << "ss:#{k}" }
+      return 0 if keys.empty?
+
+      granted = 0
+      keys.uniq.each do |k|
+        n = @db[:progression_facts]
+            .insert_conflict   # DO NOTHING: the set-union is the whole semantics
+            .insert(account_id: account_id, fact_key: k, first_at: now)
+        granted += 1 if n
+      end
+      granted
+    rescue StandardError => e
+      @log.call("flags: grant_facts failed #{e.class}: #{e.message}")
+      0
+    end
+
+    # Login materialization: hand the client its facts AND fold them into the mirror.
+    #
+    # The client applies them with delta recording suppressed - it must not echo back
+    # what we just sent - so without this fold the mirror would not know that state
+    # exists, and the next snapshot would report our own restore as missed writes.
+    # (The trust gate caught exactly that.) We know precisely what we sent, so the
+    # mirror stays a live measurement instead of being invalidated.
+    def materialize_facts(account_id, now: Time.now)
+      f = facts_for(account_id)
+      return f if f[:switches].empty? && f[:self_switches].empty?
+
+      row = @db[:flag_snapshots].where(account_id: account_id).first
+      return f unless row && row[:mirror].respond_to?(:to_h)
+
+      mirror = row[:mirror].to_h
+      f[:switches].each     { |id| mirror["sw/#{id}"] = true if owned_switch?(id) }
+      f[:self_switches].each { |k| mirror["ss/#{k}"] = true }
+      @db[:flag_snapshots].where(account_id: account_id)
+                          .update(mirror: Sequel.pg_jsonb(mirror), updated_at: now)
+      f
+    rescue StandardError => e
+      @log.call("flags: materialize failed #{e.class}: #{e.message}")
+      facts_for(account_id)
+    end
+
+    # What the client must be holding at login. -> { switches: [id,...],
+    # self_switches: ["m:e:A",...] }. A fact whose name no longer maps to an id
+    # (the dev deleted or renamed the switch) is simply dropped, never guessed.
+    def facts_for(account_id)
+      rows = @db[:progression_facts].where(account_id: account_id, revoked_at: nil).select_map(:fact_key)
+      sw = []
+      ss = []
+      rows.each do |k|
+        if k.start_with?("ss:")
+          ss << k[3..]
+        elsif (id = @fact_id_by_key[k])
+          sw << id
+        end
+      end
+      { switches: sw.sort, self_switches: ss.sort }
+    rescue StandardError => e
+      @log.call("flags: facts_for failed #{e.class}: #{e.message}")
+      { switches: [], self_switches: [] }
     end
 
     def to_id_set(list)
@@ -69,6 +147,7 @@ module PEMK
           unless drift.empty?
             @log.call("flags: account #{account_id} DELTA DRIFT — #{drift.join('; ')}")
           end
+          grant_facts(account_id, switches, selfsw, now: now)
           store(account_id, switches, vars, selfsw, seq, truncated, flags, now, drift)
           result = [:ack, flags]
         end
@@ -178,13 +257,26 @@ module PEMK
       mirror[k] = on ? true : false
     end
 
-    # An absolute snapshot IS the truth, so it always re-establishes the mirror.
+    # An absolute snapshot IS the truth, so it always re-establishes the mirror — but
+    # only over the ids the POLICY claims. The snapshot itself is deliberately
+    # unfiltered (rewind detection wants the whole picture), so without this the
+    # mirror would silently re-acquire local ids the delta stream never sends, and
+    # "the mirror" would stop meaning "the state the server owns" — which is exactly
+    # what it has to mean once it becomes the basis of authority in step 4.
     def mirror_from(switches, vars, selfsw)
       m = {}
-      switches.each { |i| m["sw/#{i}"] = true }
-      selfsw.each   { |k| m["ss/#{k}"] = true }
-      vars.each     { |id, v| m["var/#{id}"] = v }
+      switches.each { |i| m["sw/#{i}"] = true if owned_switch?(i) }
+      selfsw.each   { |k| m["ss/#{k}"] = true }          # the whole namespace is owned
+      vars.each     { |id, v| m["var/#{id}"] = v if owned_var?(id) }
       m
+    end
+
+    def owned_switch?(id)
+      @owned_switches.nil? || @owned_switches.include?(id.to_i)
+    end
+
+    def owned_var?(id)
+      @owned_vars.nil? || @owned_vars.include?(id.to_i)
     end
 
     def seed_mirror(row)

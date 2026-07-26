@@ -89,4 +89,38 @@ class LedgerTest < Minitest::Test
     assert_equal 0b1010,  snap[:balances][:badges]
     assert_equal 9,       snap[:last_seq]   # max across BOTH fields (the client's next-seq authority)
   end
+  # --- badges are progression, not currency ------------------------------------
+  # A reloaded save that predates a badge pushes a smaller mask. Assigning it erases
+  # earned progress - seen in a live session right after a rollback. Unioning keeps it
+  # and the ack hands the repaired mask straight back to the client.
+
+  def monotonic_ledger
+    PEMK::Ledger.new(@db, PEMK::Config.new.economy_caps, monotonic: true)
+  end
+
+  def test_badges_union_instead_of_shrinking
+    led = monotonic_ledger
+    assert_equal [:ack, 0b0011], led.apply_econ(@acct, :badges, 0b0011, 1)
+    assert_equal [:ack, 0b0011], led.apply_econ(@acct, :badges, 0, 2)         # rollback
+    assert_equal 0b0011, led.current(@acct, :badges)
+  end
+
+  def test_badges_still_grow_normally
+    led = monotonic_ledger
+    led.apply_econ(@acct, :badges, 0b0001, 1)
+    assert_equal [:ack, 0b0101], led.apply_econ(@acct, :badges, 0b0100, 2)   # earned another
+  end
+
+  def test_money_is_not_monotonic
+    led = monotonic_ledger
+    led.apply_econ(@acct, :money, 5000, 1)
+    assert_equal [:ack, 100], led.apply_econ(@acct, :money, 100, 2)          # spending works
+  end
+
+  def test_monotonic_is_off_by_default
+    led = PEMK::Ledger.new(@db, PEMK::Config.new.economy_caps)
+    led.apply_econ(@acct, :badges, 0b0011, 1)
+    assert_equal [:ack, 0], led.apply_econ(@acct, :badges, 0, 2)
+  end
+
 end

@@ -10,9 +10,20 @@ module PEMK
   # :unattributed). All calls run inside a per-player mailbox, so a given account's
   # mutations are already serialized (no read-modify-write race).
   class Ledger
-    def initialize(db, caps)
+    # Fields whose value is PROGRESSION rather than currency: they only ever grow, so
+    # the server unions instead of assigning and a rollback cannot erase them. Enabled
+    # with the sovereignty layer (flag_state); a fork that deliberately revokes badges
+    # in a story beat must keep that off, or clear the balance through an operator path.
+    MONOTONIC = %i[badges].freeze
+
+    def initialize(db, caps, monotonic: false)
       @db   = db
       @caps = caps            # { money: 999_999, coins: ..., ... }
+      @monotonic = monotonic
+    end
+
+    def monotonic?(key)
+      @monotonic && MONOTONIC.include?(key)
     end
 
     # -> [:ack, balance] | [:dup, recorded_balance] | [:rej, current_balance, reason]
@@ -30,6 +41,15 @@ module PEMK
           result = [:dup, recorded]                       # already applied this seq -> re-ack the recorded value
         else
           cur = current(account_id, field)
+          # Badges are progression, not currency: a player never loses one in normal
+          # play, so the bitmask is unioned instead of assigned. A reloaded save that
+          # predates a badge pushes 0 and would otherwise erase it - observed in a live
+          # session right after a rollback. The union keeps what was earned and the ack
+          # hands the repaired mask straight back to the client.
+          # Unconditional: a bitmask union is the whole semantics. Gating it on
+          # "value < cur" still loses a bit on a sideways change (0b0001 -> 0b0100),
+          # which a test caught.
+          value |= cur if monotonic?(key)
           if value.negative? || value > cap
             result = [:rej, cur, :cap]
           else
