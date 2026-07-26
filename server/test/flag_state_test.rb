@@ -25,7 +25,9 @@ class FlagStateTest < Minitest::Test
     @db[:accounts].delete
     @a = @db[:accounts].insert(email: "fl-a@x.co", password_hash: "x", status: "active", created_at: Time.now)
     @logs = []
-    @fs = PEMK::FlagState.new(@db, logger: ->(m) { @logs << m })
+    # the trust gate judges only POLICY-OWNED ids; 77 is deliberately absent (local)
+    @fs = PEMK::FlagState.new(@db, policy: { switches: [1, 2, 3, 4, 9], variables: [4, 7, 10] },
+                              logger: ->(m) { @logs << m })
   end
 
   def teardown
@@ -128,4 +130,70 @@ class FlagStateTest < Minitest::Test
     assert_equal :ack, status
     assert_equal({ "4" => 7 }, @fs.snapshot(@a)[:variables].to_h)
   end
+  # === step 3: THE TRUST GATE =================================================
+  # The client sends every intercepted write as a delta; the server folds them into
+  # a mirror and, when the next ABSOLUTE snapshot lands, checks the two agree. That
+  # agreement is the proof the interception is complete — the precondition for ever
+  # giving the server authority. Divergence is reported, never enforced.
+
+  def delta(switches: {}, variables: {}, self_switches: {}, overflow: false)
+    { switches: switches, variables: variables, self_switches: self_switches, overflow: overflow }
+  end
+
+  def test_a_complete_delta_stream_reconstructs_the_snapshot
+    @fs.apply_flags(@a, snap(switches: [1], self_switches: ["5:2:A"]), 1)   # baseline
+    # the player plays: two switches on, a self-switch set, a counter moved
+    @fs.apply_delta(@a, delta(switches: { "4" => true, "9" => true },
+                              self_switches: { "5:3:A" => true },
+                              variables: { "7" => 12 }))
+    # the client's own absolute snapshot agrees with what the deltas said
+    _, = @fs.apply_flags(@a, snap(switches: [1, 4, 9], self_switches: ["5:2:A", "5:3:A"],
+                                  variables: { "7" => 12 }), 2)
+    row = @fs.snapshot(@a)
+    assert_nil row[:drift], "a complete stream must show no drift"
+    refute(@logs.any? { |l| l.include?("DELTA DRIFT") }, @logs.inspect)
+  end
+
+  # THE failure this gate exists to catch: a write the interception MISSED.
+  def test_a_missed_write_shows_up_as_drift
+    @fs.apply_flags(@a, snap(switches: [1]), 1)
+    @fs.apply_delta(@a, delta(switches: { "4" => true }))
+    # ...but the truth also contains switch 9, which no delta ever reported
+    @fs.apply_flags(@a, snap(switches: [1, 4, 9]), 2)
+    refute_nil @fs.snapshot(@a)[:drift]
+    assert(@logs.any? { |l| l.include?("DELTA DRIFT") }, @logs.inspect)
+  end
+
+  def test_a_variable_the_deltas_got_wrong_is_named_in_the_drift
+    @fs.apply_flags(@a, snap(variables: { "7" => 1 }), 1)
+    @fs.apply_delta(@a, delta(variables: { "7" => 5 }))
+    @fs.apply_flags(@a, snap(variables: { "7" => 9 }), 2)   # truth says 9, mirror said 5
+    assert_match(/var 7 mirror=5 snapshot=9/, @fs.snapshot(@a)[:drift])
+  end
+
+  # An overflowed delta means WE know the mirror is incomplete — comparing then would
+  # report our own gap as the client's divergence.
+  def test_an_overflowed_delta_suspends_the_comparison
+    @fs.apply_flags(@a, snap(switches: [1]), 1)
+    @fs.apply_delta(@a, delta(overflow: true))
+    refute @fs.snapshot(@a)[:mirror_valid]
+    @fs.apply_flags(@a, snap(switches: [1, 2, 3, 4]), 2)   # would look like 3 missed writes
+    assert_nil @fs.snapshot(@a)[:drift], "an invalid mirror must not accuse the client"
+    assert @fs.snapshot(@a)[:mirror_valid], "...and the snapshot re-establishes it"
+  end
+
+  # An id the policy calls LOCAL never appears in the delta stream, and must not be
+  # mistaken for a missed write.
+  def test_ids_the_mirror_never_heard_of_are_not_counted_as_missing
+    @fs.apply_flags(@a, snap(switches: [1]), 1)
+    @fs.apply_delta(@a, delta(switches: { "4" => true }))
+    # switch 77 is local: it is in the truth but was never deltaed, and never known
+    @fs.apply_flags(@a, snap(switches: [1, 4, 77]), 2)
+    assert_nil @fs.snapshot(@a)[:drift]
+  end
+
+  def test_a_delta_before_any_snapshot_is_ignored
+    assert_equal :bad, @fs.apply_delta(@a, delta(switches: { "4" => true })).first
+  end
+
 end
