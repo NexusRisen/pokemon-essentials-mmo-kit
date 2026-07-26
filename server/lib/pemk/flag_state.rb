@@ -29,11 +29,64 @@ module PEMK
     # policy: { switches: Set/Array of non-local ids, variables: ... }. The comparison
     # is only meaningful over ids the POLICY claims — a LOCAL id is legitimately absent
     # from the delta stream, and judging it would report our own scope as a divergence.
-    def initialize(db, policy: nil, logger: nil)
+    def initialize(db, policy: nil, facts: nil, logger: nil)
       @db  = db
       @log = logger || ->(_m) {}
       @owned_switches = to_id_set(policy && (policy[:switches] || policy["switches"]))
       @owned_vars     = to_id_set(policy && (policy[:variables] || policy["variables"]))
+      # id <-> stable key for fact-tier switches. Keys are name-derived because the
+      # compiler renumbers ids, so the stored fact survives a renumber and resolves
+      # back to whatever id currently carries that name.
+      @fact_key_by_id = {}
+      @fact_id_by_key = {}
+      (facts || {}).each do |id, key|
+        @fact_key_by_id[id.to_i] = key.to_s
+        @fact_id_by_key[key.to_s] = id.to_i
+      end
+    end
+
+    # --- step 4: the grant-only progression ledger -----------------------------
+
+    # Union the facts implied by an absolute snapshot into the ledger. Grant-only:
+    # a rollback cannot take one back, which is what makes rewind detection moot.
+    # -> number of NEW facts granted.
+    def grant_facts(account_id, switches, selfsw, now: Time.now)
+      keys = []
+      switches.each { |id| (k = @fact_key_by_id[id]) && keys << k }
+      selfsw.each   { |k| keys << "ss:#{k}" }
+      return 0 if keys.empty?
+
+      granted = 0
+      keys.uniq.each do |k|
+        n = @db[:progression_facts]
+            .insert_conflict   # DO NOTHING: the set-union is the whole semantics
+            .insert(account_id: account_id, fact_key: k, first_at: now)
+        granted += 1 if n
+      end
+      granted
+    rescue StandardError => e
+      @log.call("flags: grant_facts failed #{e.class}: #{e.message}")
+      0
+    end
+
+    # What the client must be holding at login. -> { switches: [id,...],
+    # self_switches: ["m:e:A",...] }. A fact whose name no longer maps to an id
+    # (the dev deleted or renamed the switch) is simply dropped, never guessed.
+    def facts_for(account_id)
+      rows = @db[:progression_facts].where(account_id: account_id, revoked_at: nil).select_map(:fact_key)
+      sw = []
+      ss = []
+      rows.each do |k|
+        if k.start_with?("ss:")
+          ss << k[3..]
+        elsif (id = @fact_id_by_key[k])
+          sw << id
+        end
+      end
+      { switches: sw.sort, self_switches: ss.sort }
+    rescue StandardError => e
+      @log.call("flags: facts_for failed #{e.class}: #{e.message}")
+      { switches: [], self_switches: [] }
     end
 
     def to_id_set(list)
@@ -69,6 +122,7 @@ module PEMK
           unless drift.empty?
             @log.call("flags: account #{account_id} DELTA DRIFT — #{drift.join('; ')}")
           end
+          grant_facts(account_id, switches, selfsw, now: now)
           store(account_id, switches, vars, selfsw, seq, truncated, flags, now, drift)
           result = [:ack, flags]
         end

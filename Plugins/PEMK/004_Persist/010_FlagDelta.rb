@@ -32,6 +32,7 @@ module PEMK
       @self_switches = {}  # key => bool
       @overflow      = false
       @origin        = nil # [map_id, event_id] of the running event, for attribution
+      @suppressed    = false
 
       module_function
 
@@ -63,15 +64,29 @@ module PEMK
 
       def origin; @origin; end
 
+      # Applying server-sent state must not be recorded as a client write: echoing it
+      # straight back is noise the trust gate would then have to explain away.
+      def suppress
+        prev = @suppressed
+        @suppressed = true
+        yield
+      ensure
+        @suppressed = prev
+      end
+
+      def suppressed?; @suppressed == true; end
+
       # --- recording ---------------------------------------------------------
 
       def record_switch(id, value)
+        return if @suppressed
         return unless PEMK::Flags.owned?(:switches, id)
 
         note(@switches, id, value ? true : false)
       end
 
       def record_variable(id, value)
+        return if @suppressed
         return unless PEMK::Flags.owned?(:variables, id)
         # Only primitives cross the wire. A variable legitimately holds a Pokémon or
         # an Array in Essentials; those are recorded as untracked rather than shipped.
@@ -81,6 +96,7 @@ module PEMK
       end
 
       def record_self_switch(key, value)
+        return if @suppressed
         return unless key.is_a?(Array) && key.length >= 3
 
         note(@self_switches, "#{key[0]}:#{key[1]}:#{key[2]}", value ? true : false)

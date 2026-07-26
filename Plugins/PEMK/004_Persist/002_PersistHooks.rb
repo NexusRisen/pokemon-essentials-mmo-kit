@@ -73,6 +73,7 @@ module Game
         PEMK::Auth.reconcile_economy       # ledger snapshot (empty for a new account)
         PEMK::Auth.reconcile_inventory     # unseeded -> seed the fresh bag on the first flush
         PEMK::Auth.reconcile_monsters      # uid sweep + first party projection
+        (PEMK::Flags.reconcile rescue nil) # union the server's progression facts
         # Server-authoritative: the local Game.rxdata is a disposable per-session
         # cache, so overwriting it is always fine. Clear begun_new_game so the core
         # skips its "a different game is already saved" warning on the next save.
@@ -85,6 +86,7 @@ module Game
         PEMK::Auth.reconcile_economy       # ledger is the economy authority, over the blob
         PEMK::Auth.reconcile_inventory     # server bag overwrites the blob bag (or seeds if unseeded)
         PEMK::Auth.reconcile_monsters      # uid sweep (legacy-save adoption) + first party projection
+        (PEMK::Flags.reconcile rescue nil) # union the server's progression facts
         PEMK::Auth.clear_pending
       end
 

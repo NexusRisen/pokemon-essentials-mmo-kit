@@ -124,5 +124,51 @@ module PEMK
     def on_ack(msg)
       PEMK.log("flags: server flagged a state rewind (seq #{msg[:seq]})") if msg && msg[:flagged]
     end
+
+    # --- step 4: login authority (facts only) ---------------------------------
+    # The server's progression facts are UNIONED into the loaded save. A union can
+    # only ever ADD, so this restores progress a rollback or a lost save dropped and
+    # can never destroy any - including a session played offline, whose own facts
+    # simply travel up on the next snapshot. Mirrored VALUES are deliberately not
+    # applied here: overwriting a counter needs to know which side is newer, which
+    # is what step 5's fencing provides.
+    def note_facts(facts)
+      @pending_facts = facts if facts.is_a?(Hash)
+    end
+
+    # Called after the save has loaded (PersistHooks), like reconcile_monsters.
+    def reconcile
+      f = @pending_facts
+      @pending_facts = nil
+      return unless f && active? && $game_switches && $game_self_switches
+
+      applied = 0
+      # Suppress delta recording: we are applying what the server just told us, and
+      # echoing it straight back would be noise the trust gate then has to explain.
+      PEMK::Flags::Delta.suppress do
+        Array(f[:switches]).each do |id|
+          next unless id.is_a?(Integer) && !$game_switches[id]
+
+          $game_switches[id] = true
+          applied += 1
+        end
+        Array(f[:self_switches]).each do |k|
+          parts = k.to_s.split(":")
+          next unless parts.length == 3
+
+          key = [parts[0].to_i, parts[1].to_i, parts[2]]
+          next if $game_self_switches[key]
+
+          $game_self_switches[key] = true
+          applied += 1
+        end
+      end
+      return if applied.zero?
+
+      $game_map.need_refresh = true if $game_map   # event pages must re-evaluate
+      PEMK.log("flags: restored #{applied} progression fact(s) from the server")
+    rescue => e
+      PEMK.log("flags: reconcile error #{e.class}: #{e.message}")
+    end
   end
 end

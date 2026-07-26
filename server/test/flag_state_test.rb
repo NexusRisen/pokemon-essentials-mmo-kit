@@ -15,6 +15,7 @@ class FlagStateTest < Minitest::Test
   def setup
     @db = PEMK::DB.connect(ENV.fetch("DATABASE_URL"))
     @db[:flag_snapshots].delete rescue nil
+    @db[:progression_facts].delete rescue nil
     # dependents first: monsters/rolls hold FKs to accounts (no cascade — audit rows
     # deliberately survive account deletion), so a bare accounts.delete would fail.
     @db[:enforcement_events].delete rescue nil
@@ -27,6 +28,7 @@ class FlagStateTest < Minitest::Test
     @logs = []
     # the trust gate judges only POLICY-OWNED ids; 77 is deliberately absent (local)
     @fs = PEMK::FlagState.new(@db, policy: { switches: [1, 2, 3, 4, 9], variables: [4, 7, 10] },
+                              facts: { 4 => "sw:defeated_gym_1", 9 => "sw:visited_island" },
                               logger: ->(m) { @logs << m })
   end
 
@@ -210,6 +212,52 @@ class FlagStateTest < Minitest::Test
     assert_equal 3, m["var/7"]                   # owned
     assert_nil m["var/99"], "a local variable must not enter the mirror"
     assert_equal true, m["ss/5:2:A"]             # self-switches are wholly owned
+  end
+
+  # === step 4: the grant-only progression ledger ==============================
+
+  def test_facts_are_granted_from_a_snapshot_and_survive_a_rollback
+    @fs.apply_flags(@a, snap(switches: [4, 9], self_switches: ["5:2:A"]), 1)
+    f = @fs.facts_for(@a)
+    assert_equal [4, 9], f[:switches]
+    assert_equal ["5:2:A"], f[:self_switches]
+
+    # the client rolls its save back: the snapshot no longer carries any of it
+    @fs.apply_flags(@a, snap(switches: [], self_switches: []), 2)
+    f = @fs.facts_for(@a)
+    assert_equal [4, 9], f[:switches], "a fact is grant-only - a rollback cannot take it back"
+    assert_equal ["5:2:A"], f[:self_switches]
+  end
+
+  def test_only_fact_tier_switches_become_facts
+    @fs.apply_flags(@a, snap(switches: [1, 2, 3, 4]), 1)   # 1,2,3 are mirror-tier
+    assert_equal [4], @fs.facts_for(@a)[:switches]
+  end
+
+  def test_granting_is_idempotent
+    3.times { |i| @fs.apply_flags(@a, snap(switches: [4], self_switches: ["5:2:A"]), i + 1) }
+    assert_equal 2, @db[:progression_facts].where(account_id: @a).count
+  end
+
+  # Keys are name-derived so a compiler renumber does not lose progression: the fact
+  # stored under "sw:defeated_gym_1" resolves to whatever id now carries that name.
+  def test_a_renumbered_switch_still_resolves_to_its_fact
+    @fs.apply_flags(@a, snap(switches: [4]), 1)
+    renumbered = PEMK::FlagState.new(@db, policy: { switches: [88] },
+                                     facts: { 88 => "sw:defeated_gym_1" })
+    assert_equal [88], renumbered.facts_for(@a)[:switches]
+  end
+
+  def test_a_fact_whose_name_vanished_is_dropped_not_guessed
+    @fs.apply_flags(@a, snap(switches: [4]), 1)
+    gone = PEMK::FlagState.new(@db, policy: { switches: [] }, facts: {})
+    assert_empty gone.facts_for(@a)[:switches]
+  end
+
+  def test_an_operator_revoked_fact_is_not_sent
+    @fs.apply_flags(@a, snap(switches: [4]), 1)
+    @db[:progression_facts].where(account_id: @a).update(revoked_at: Time.now)
+    assert_empty @fs.facts_for(@a)[:switches]
   end
 
 end
