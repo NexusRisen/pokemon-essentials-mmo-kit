@@ -178,13 +178,26 @@ module PEMK
       mirror[k] = on ? true : false
     end
 
-    # An absolute snapshot IS the truth, so it always re-establishes the mirror.
+    # An absolute snapshot IS the truth, so it always re-establishes the mirror — but
+    # only over the ids the POLICY claims. The snapshot itself is deliberately
+    # unfiltered (rewind detection wants the whole picture), so without this the
+    # mirror would silently re-acquire local ids the delta stream never sends, and
+    # "the mirror" would stop meaning "the state the server owns" — which is exactly
+    # what it has to mean once it becomes the basis of authority in step 4.
     def mirror_from(switches, vars, selfsw)
       m = {}
-      switches.each { |i| m["sw/#{i}"] = true }
-      selfsw.each   { |k| m["ss/#{k}"] = true }
-      vars.each     { |id, v| m["var/#{id}"] = v }
+      switches.each { |i| m["sw/#{i}"] = true if owned_switch?(i) }
+      selfsw.each   { |k| m["ss/#{k}"] = true }          # the whole namespace is owned
+      vars.each     { |id, v| m["var/#{id}"] = v if owned_var?(id) }
       m
+    end
+
+    def owned_switch?(id)
+      @owned_switches.nil? || @owned_switches.include?(id.to_i)
+    end
+
+    def owned_var?(id)
+      @owned_vars.nil? || @owned_vars.include?(id.to_i)
     end
 
     def seed_mirror(row)

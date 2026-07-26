@@ -196,4 +196,20 @@ class FlagStateTest < Minitest::Test
     assert_equal :bad, @fs.apply_delta(@a, delta(switches: { "4" => true })).first
   end
 
+  # The mirror must mean "the state the server OWNS", not "everything it has seen".
+  # The snapshot is deliberately unfiltered (rewind detection needs the whole
+  # picture), so without filtering the seed the mirror silently re-acquires local ids
+  # the delta stream never sends — harmless for the comparison, but it makes the
+  # mirror lie about its own scope right before it becomes the basis of authority.
+  def test_the_mirror_only_holds_policy_owned_state
+    @fs.apply_flags(@a, snap(switches: [1, 77], variables: { "7" => 3, "99" => 5 },
+                             self_switches: ["5:2:A"]), 1)
+    m = @fs.snapshot(@a)[:mirror].to_h
+    assert_equal true, m["sw/1"]                 # owned
+    assert_nil m["sw/77"], "a local switch must not enter the mirror"
+    assert_equal 3, m["var/7"]                   # owned
+    assert_nil m["var/99"], "a local variable must not enter the mirror"
+    assert_equal true, m["ss/5:2:A"]             # self-switches are wholly owned
+  end
+
 end
